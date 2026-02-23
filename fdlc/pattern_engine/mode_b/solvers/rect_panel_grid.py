@@ -6,6 +6,12 @@ from __future__ import annotations
 import json
 from typing import Dict, List
 
+try:
+    from ezdxf.enums import TextEntityAlignment as _TEA
+    _TEXT_ALIGN = _TEA.MIDDLE_CENTER
+except ImportError:
+    _TEXT_ALIGN = "MIDDLE_CENTER"  # ezdxf < 1.0 fallback
+
 MM_PER_INCH = 25.4
 CUTLINE_OFFSET_IN = 3.0 / MM_PER_INCH
 
@@ -134,7 +140,7 @@ def draw(msp, dims: dict, x_offset: float = 0.0, y_offset: float = 0.0):
             block.add_text(
                 label,
                 dxfattribs={"layer": "1", "height": text_height},
-            ).set_placement((panel_w / 2.0, panel_h / 2.0), align="MIDDLE_CENTER")
+            ).set_placement((panel_w / 2.0, panel_h / 2.0), align=_TEXT_ALIGN)
 
         insert_x = x_offset + float(piece["x_origin"])
         insert_y = y_offset + float(piece["y_origin"])

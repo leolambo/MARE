@@ -241,13 +241,22 @@ def main() -> int:
     parser.add_argument("--ratios", help="Manual ratio JSON override (skips Gemini), e.g. '{\"panels_per_row\":3,...}'")
     parser.add_argument("--recalculate", action="store_true", help="Re-run solver for post-CLO3D adjustments")
     parser.add_argument("--dry-run", action="store_true", help="Print actions without external calls or file writes")
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help="Draft mode: read from patterns/mode_b/draft/pattern-intake-draft.md, write DXF to patterns/mode_b/draft/",
+    )
     args = parser.parse_args()
 
     _ensure_ezdxf()
 
     design_slug = args.design_name.strip().lower().replace(" ", "-")
     design_dir = DESIGNS_ROOT / design_slug
-    intake_path = design_dir / "pattern-intake.md"
+
+    if args.draft:
+        intake_path = design_dir / "patterns" / "mode_b" / "draft" / "pattern-intake-draft.md"
+    else:
+        intake_path = design_dir / "pattern-intake.md"
 
     if not design_dir.exists():
         print(f"Design directory not found: {design_dir}", file=sys.stderr)
@@ -301,8 +310,12 @@ def main() -> int:
         seam_allowance=0.625,
     )
 
-    output_dir = design_dir / "patterns/mode_b"
-    output_path = output_dir / f"{design_slug}-panels.dxf"
+    if args.draft:
+        output_dir = design_dir / "patterns" / "mode_b" / "draft"
+        output_path = output_dir / f"{design_slug}-panels-draft.dxf"
+    else:
+        output_dir = design_dir / "patterns/mode_b"
+        output_path = output_dir / f"{design_slug}-panels.dxf"
 
     if args.dry_run:
         print(f"[dry-run] Recalculate mode: {args.recalculate}")

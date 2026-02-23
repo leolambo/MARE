@@ -234,7 +234,11 @@ def load_design(name: str, dry_run: bool = False) -> Tuple[Path, Dict[str, Any],
 def collect_phase1(metadata: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     auto_garment_type = detect_garment_type(metadata)
 
-    if dry_run and not is_interactive():
+    if not is_interactive():
+        # Non-interactive (e.g. piped/background): fall back to DEFAULT_MOCK_ANSWERS
+        if not dry_run:
+            print("⚠ Non-interactive session — using placeholder measurements (DEFAULT_MOCK_ANSWERS).")
+            print("  Run interactively or with --dry-run to control measurements.")
         answers = dict(DEFAULT_MOCK_ANSWERS)
         if auto_garment_type:
             answers["garment_type"] = auto_garment_type
@@ -810,7 +814,8 @@ def edit_json_in_editor(value: Any) -> Any:
 def confirm_edit_loop(suggestions: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     confirmed: Dict[str, Any] = {}
 
-    if dry_run and not is_interactive():
+    if not is_interactive():
+        # Non-interactive: auto-accept all AI suggestions
         for key, _ in SUGGESTION_ORDER:
             confirmed[key] = suggestions.get(key)
         return confirmed
@@ -924,12 +929,22 @@ def render_markdown(design_name: str, today: str, phase1: Dict[str, Any], confir
     return "\n".join(md).strip() + "\n"
 
 
-def update_metadata_and_index(design_dir: Path, metadata: Dict[str, Any], today: str, dry_run: bool = False) -> None:
+def update_metadata_and_index(
+    design_dir: Path, metadata: Dict[str, Any], today: str, dry_run: bool = False, draft: bool = False
+) -> None:
     metadata_path = design_dir / "metadata.json"
     metadata_out = dict(metadata)
-    metadata_out["status"] = "in-pattern"
-    metadata_out["updated"] = today
-    metadata_out["intake_date"] = today
+
+    if draft:
+        # Draft mode: keep status at concept, flag intake_mode
+        metadata_out["intake_mode"] = "draft"
+        metadata_out["updated"] = today
+    else:
+        # Production mode: advance status, lock measurements
+        metadata_out["status"] = "in-pattern"
+        metadata_out["updated"] = today
+        metadata_out["intake_date"] = today
+        metadata_out.pop("intake_mode", None)  # clear any prior draft flag
 
     index_path = DESIGNS_ROOT / "index.json"
     index_data = read_json(index_path, default={"updated": today, "designs": []})
@@ -940,19 +955,21 @@ def update_metadata_and_index(design_dir: Path, metadata: Dict[str, Any], today:
         designs = []
 
     design_id = metadata_out.get("id") or design_dir.name
+    new_status = metadata_out.get("status", metadata.get("status", "concept"))
     found = False
     for entry in designs:
         if isinstance(entry, dict) and entry.get("id") == design_id:
-            entry["status"] = "in-pattern"
+            if not draft:
+                entry["status"] = new_status
             found = True
             break
 
-    if not found:
+    if not found and not draft:
         designs.append(
             {
                 "id": design_id,
                 "name": metadata_out.get("name", design_id),
-                "status": "in-pattern",
+                "status": new_status,
                 "created": metadata_out.get("created", today),
             }
         )
@@ -960,14 +977,17 @@ def update_metadata_and_index(design_dir: Path, metadata: Dict[str, Any], today:
     index_data["designs"] = designs
     index_data["updated"] = today
 
+    draft_tag = " [DRAFT — status unchanged]" if draft else ""
     if dry_run:
-        print("[dry-run] Would update metadata.json and designs/index.json")
+        print(f"[dry-run] Would update metadata.json{draft_tag} and designs/index.json")
         return
 
     write_json(metadata_path, metadata_out)
-    write_json(index_path, index_data)
-    print("✓ Updated metadata.json")
-    print("✓ Updated index.json")
+    if not draft:
+        write_json(index_path, index_data)
+    print(f"✓ Updated metadata.json{draft_tag}")
+    if not draft:
+        print("✓ Updated index.json")
 
 
 def validate_status(metadata: Dict[str, Any], force: bool = False) -> None:
@@ -1080,6 +1100,15 @@ def main() -> None:
     )
     parser.add_argument("--no-debate", action="store_true", help="Skip adversarial debate and use single-pass suggestions")
     parser.add_argument("--max-rounds", type=int, default=MAX_DEBATE_ROUNDS_DEFAULT, help="Maximum debate rounds (default: 3)")
+    parser.add_argument(
+        "--draft",
+        action="store_true",
+        help=(
+            "Draft mode: writes intake to patterns/mode_b/draft/, keeps status at 'concept', "
+            "sets intake_mode='draft' in metadata. Use for placeholder measurement testing. "
+            "Run without --draft to advance status to in-pattern and lock measurements."
+        ),
+    )
     args = parser.parse_args()
 
     design_dir, metadata, readme, spec = load_design(args.name, dry_run=args.dry_run)
@@ -1153,19 +1182,45 @@ def main() -> None:
     today = date.today().isoformat()
     design_name = metadata.get("name") or design_dir.name
     output_md = render_markdown(design_name, today, phase1, confirmed)
-    intake_path = design_dir / "pattern-intake.md"
+
+    if args.draft:
+        draft_dir = design_dir / "patterns" / "mode_b" / "draft"
+        intake_path = draft_dir / "pattern-intake-draft.md"
+        mode_tag = " [DRAFT]"
+    else:
+        intake_path = design_dir / "pattern-intake.md"
+        mode_tag = ""
 
     if args.dry_run:
-        print(f"[dry-run] Would write: {intake_path}")
+        print(f"[dry-run] Would write{mode_tag}: {intake_path}")
     else:
-        design_dir.mkdir(parents=True, exist_ok=True)
+        intake_path.parent.mkdir(parents=True, exist_ok=True)
         intake_path.write_text(output_md)
-        print(f"✓ Wrote {intake_path}")
+        print(f"✓ Wrote{mode_tag}: {intake_path}")
 
-    update_metadata_and_index(design_dir, metadata, today, dry_run=args.dry_run)
-    run_qmd(dry_run=args.dry_run)
+    update_metadata_and_index(design_dir, metadata, today, dry_run=args.dry_run, draft=args.draft)
+    if not args.draft:
+        run_qmd(dry_run=args.dry_run)
 
-    print("\n✅ Pattern intake flow complete")
+    if args.draft:
+        print("\n📐 Draft mode — Mode B parametric generator:")
+        parametric_gen_path = Path(__file__).resolve().parent / "pattern_engine/mode_b/parametric_gen.py"
+        cmd = [sys.executable, str(parametric_gen_path), design_dir.name, "--draft"]
+        if phase1.get("tech_pack_path"):
+            cmd.extend(["--tech-pack", str(phase1["tech_pack_path"])])
+        print("$ " + " ".join(cmd))
+        if args.dry_run:
+            print("[dry-run] Intake file not written — skipping parametric_gen call.")
+            print("[dry-run] To generate DXF from draft, also provide --ratios or --tech-pack:")
+            print(f"[dry-run] $ parametric_gen {design_dir.name} --draft --ratios '{{\"panels_per_row\":3,...}}'")
+        else:
+            result = subprocess.run(cmd, check=False)
+            if result.returncode != 0:
+                print(f"⚠ parametric_gen.py exited {result.returncode} — check output above")
+            else:
+                print("✅ Mode B draft DXF generated")
+
+    print(f"\n{'📝 Draft' if args.draft else '✅'} Pattern intake flow complete{mode_tag}")
 
 
 if __name__ == "__main__":
