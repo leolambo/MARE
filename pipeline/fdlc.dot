@@ -1,0 +1,256 @@
+/**
+ * MARE Fashion Design Life Cycle (FDLC)
+ * Attractor-compatible DOT graph
+ *
+ * Each node = a script, tool, or human decision point
+ * Each edge = a stage transition with gate condition
+ * Status: [ ] = not built, [~] = partial, [x] = built
+ *
+ * Future: run as `attractor run fdlc --design <name>`
+ * Ref: https://github.com/strongdm/attractor
+ */
+
+digraph FDLC {
+
+  // --- Graph styling ---
+  graph [rankdir=TB, nodesep=0.6, ranksep=0.8, fontname="Helvetica"]
+  node  [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, margin="0.2,0.1"]
+  edge  [fontname="Helvetica", fontsize=9, color="#555555"]
+
+  // --- Color legend ---
+  // green  = built
+  // yellow = in progress / partial
+  // orange = TODO, spec complete
+  // grey   = human decision point
+  // blue   = external tool
+
+  // =========================================================
+  // STAGE 1 — IDEATION
+  // =========================================================
+
+  subgraph cluster_ideation {
+    label="Stage 1 — Ideation"
+    style=filled fillcolor="#f8f8f8" color="#cccccc"
+
+    archive_sweep [
+      label="archive/vision_sweep_local.py\n+ vision_sweep.py\n(Qwen triage → Gemini detail pass)"
+      fillcolor="#90EE90"
+    ]
+
+    image_gen_gemini [
+      label="Gemini 3 Pro Image\n(multi-ref + prompt → concept render)"
+      fillcolor="#90EE90"
+    ]
+
+    image_gen_flux [
+      label="image_gen/flux_generate.py\n(FLUX local — free text-only iteration)"
+      fillcolor="#90EE90"
+    ]
+
+    image_gen_kontext [
+      label="image_gen/kontext.py\n(Kontext [pro] — colorway/fabric edits, $0.04)"
+      fillcolor="#90EE90"
+    ]
+
+    visual_lock [
+      label="⬡ VISUAL LOCK\nLeo approves direction"
+      shape=diamond fillcolor="#d3d3d3"
+    ]
+
+    archive_sweep    -> image_gen_gemini  [label="reference pull"]
+    image_gen_gemini -> image_gen_kontext [label="iterate colorways"]
+    image_gen_flux   -> image_gen_kontext [label="refine best local gen"]
+    image_gen_gemini -> visual_lock
+    image_gen_kontext -> visual_lock
+  }
+
+  // =========================================================
+  // STAGE 2 — CONCEPT (SCAFFOLD)
+  // =========================================================
+
+  subgraph cluster_concept {
+    label="Stage 2 — Concept"
+    style=filled fillcolor="#f8f8f8" color="#cccccc"
+
+    scaffold [
+      label="fdlc/scaffold.py\n(creates design repo entry, registers in DSS)"
+      fillcolor="#90EE90"
+    ]
+  }
+
+  visual_lock -> scaffold [label="human: visual lock\nstatus → concept"]
+
+  // =========================================================
+  // STAGE 2.5 — SILHOUETTE GENERATION
+  // =========================================================
+
+  subgraph cluster_silhouette {
+    label="Stage 2.5 — Silhouette Generation"
+    style=filled fillcolor="#f8f8f8" color="#cccccc"
+
+    kontext_silhouette [
+      label="image_gen/kontext.py\n(render → B&W technical flat\nsilhouette prompt)"
+      fillcolor="#90EE90"
+    ]
+
+    potrace [
+      label="potrace\n(silhouette.png → silhouette.svg)"
+      fillcolor="#90EE90"
+    ]
+
+    generate_silhouette [
+      label="fdlc/generate_silhouette.py\n[TODO — wraps kontext + potrace]"
+      fillcolor="#FFD580"
+    ]
+
+    kontext_silhouette -> potrace [label="silhouette.png"]
+    potrace -> generate_silhouette [style=dashed label="will wrap both steps"]
+  }
+
+  scaffold -> kontext_silhouette [label="approved render"]
+
+  // =========================================================
+  // STAGE 3 — PATTERN INTAKE
+  // =========================================================
+
+  subgraph cluster_intake {
+    label="Stage 3 — Pattern Initiation"
+    style=filled fillcolor="#f8f8f8" color="#cccccc"
+
+    pattern_intake [
+      label="fdlc/pattern_intake.py\n(Opus↔Sonnet adversarial debate, max 4 rounds\noptional: tech pack → ratio extraction → solver\n--recalculate flag for post-CLO3D adjustments)"
+      fillcolor="#90EE90"
+    ]
+
+    gemini_ratio [
+      label="Gemini 2.5 Flash vision\n(tech pack image → ratio JSON)"
+      fillcolor="#90EE90"
+    ]
+
+    human_measurements [
+      label="⬡ Core measurements\n(waist, hip, inseam, rise, ease)"
+      shape=diamond fillcolor="#d3d3d3"
+    ]
+  }
+
+  generate_silhouette -> pattern_intake [label="silhouette.svg\nstatus → approved"]
+  potrace             -> pattern_intake [label="silhouette.svg (direct path)"]
+  human_measurements  -> pattern_intake [label="core measurements"]
+  gemini_ratio        -> pattern_intake [label="ratio JSON (Mode B path)"]
+
+  // =========================================================
+  // STAGE 4 — PATTERN GENERATION
+  // =========================================================
+
+  subgraph cluster_pattern {
+    label="Stage 4 — Pattern Generation"
+    style=filled fillcolor="#f8f8f8" color="#cccccc"
+
+    mode_select [
+      label="⬡ Mode Selection\nA = organic curves\nB = geometric/parametric"
+      shape=diamond fillcolor="#d3d3d3"
+    ]
+
+    illustrator_bridge [
+      label="fdlc/pattern_engine/mode_a/illustrator_bridge.py\n[TODO]\n(SVG → svgelements → shapely+pyclipr → ezdxf → DXF)"
+      fillcolor="#FFB347"
+    ]
+
+    parametric_gen [
+      label="fdlc/pattern_engine/mode_b/parametric_gen.py\n[TODO]\n(ratios × measurements → solver → ezdxf → DXF)"
+      fillcolor="#FFB347"
+    ]
+
+    solvers [
+      label="fdlc/pattern_engine/mode_b/solvers/\n[TODO]\nrect_panel_grid | curved_panel\ntapered_panel | waistband"
+      fillcolor="#FFB347"
+    ]
+
+    dxf_output [
+      label="AAMA/ASTM DXF\n(Layer 14/87, named BLOCKs, R12 POLYLINE)"
+      fillcolor="#FFD580"
+    ]
+
+    parametric_gen -> solvers       [label="calls primitives"]
+    solvers        -> dxf_output
+    illustrator_bridge -> dxf_output
+  }
+
+  pattern_intake -> mode_select   [label="pattern-intake.md\nstatus → in-pattern"]
+  mode_select    -> illustrator_bridge [label="Mode A"]
+  mode_select    -> parametric_gen     [label="Mode B"]
+
+  // =========================================================
+  // STAGE 5 — CLO3D SIMULATION
+  // =========================================================
+
+  subgraph cluster_simulation {
+    label="Stage 5 — 3D Simulation"
+    style=filled fillcolor="#f8f8f8" color="#cccccc"
+
+    clo3d_import [
+      label="CLO3D\n(import DXF, assign fabric,\nsew pieces, simulate)"
+      shape=box style="filled" fillcolor="#ADD8E6"
+    ]
+
+    fit_check [
+      label="⬡ FIT CHECK\nLeo reviews simulation"
+      shape=diamond fillcolor="#d3d3d3"
+    ]
+
+    recalculate [
+      label="fdlc/pattern_intake.py --recalculate\n(adjust ratios → re-run solver → new DXF)"
+      fillcolor="#90EE90"
+    ]
+  }
+
+  dxf_output  -> clo3d_import [label="status → pattern-ready"]
+  clo3d_import -> fit_check
+  fit_check   -> recalculate  [label="fit issues → adjust ratios"]
+  recalculate -> parametric_gen [label="re-run Mode B solver"]
+  fit_check   -> tech_pack    [label="fit approved\nstatus → simulated"]
+
+  // =========================================================
+  // STAGE 6 — TECH PACK
+  // =========================================================
+
+  subgraph cluster_techpack {
+    label="Stage 6 — Tech Pack"
+    style=filled fillcolor="#f8f8f8" color="#cccccc"
+
+    tech_pack [
+      label="Tech pack generation\n[TODO — auto from pattern-intake.md + CLO3D]\n(currently: manual Gemini flat gen)"
+      fillcolor="#FFD580"
+    ]
+
+    tp_approved [
+      label="⬡ TECH PACK APPROVED\nLeo signs off"
+      shape=diamond fillcolor="#d3d3d3"
+    ]
+  }
+
+  tech_pack -> tp_approved
+
+  // =========================================================
+  // STAGE 7 — PRODUCTION
+  // =========================================================
+
+  subgraph cluster_production {
+    label="Stage 7 — Production"
+    style=filled fillcolor="#f8f8f8" color="#cccccc"
+
+    manufacturer_brief [
+      label="Manufacturer brief\n[TODO]\n(tech pack + production notes → PDF)"
+      fillcolor="#FFB347"
+    ]
+
+    in_production [
+      label="✓ IN PRODUCTION\nstatus → in-production"
+      shape=ellipse fillcolor="#90EE90"
+    ]
+  }
+
+  tp_approved -> manufacturer_brief [label="status → tech-pack-ready"]
+  manufacturer_brief -> in_production
+
+}
