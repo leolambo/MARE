@@ -53,6 +53,12 @@ GEMINI_URL_TMPL = (
     "gemini-2.5-flash:generateContent?key={key}"
 )
 
+# ── Queue definitions (from ONLINE-GEMINI-STRATEGY.md) ────────────────────────
+QUEUE_A_TYPES = {"product_photo", "on_model", "packaging"}   # Trust Qwen, skip
+QUEUE_B_TYPES = {"graphic", "logo", "render_3d", "detail_shot", "texture_swatch", "unknown"}  # Verify
+QUEUE_C_TYPES = {"graphic", "sketch", "mood_board", "fabric_photo", "technical_drawing",       # Rescue
+                 "reference_photo", "pattern_piece"}
+
 CATEGORIZATION_PROMPT = """You are analyzing images from MARE, a streetwear brand (2018-2022) with techwear and sportswear influences, being prepared for relaunch.
 
 Analyze this image and return a JSON object with:
@@ -150,8 +156,16 @@ def call_gemini(image_path: str) -> dict:
 
 
 # ── Queue builder ──────────────────────────────────────────────────────────────
-def build_queue(state: dict, high_only: bool = True) -> list[str]:
-    """Return absolute paths that have Qwen results but no Gemini pass yet."""
+def build_queue(state: dict, queue_mode: str = "all") -> list[str]:
+    """
+    Return absolute paths that have Qwen results but no Gemini pass yet.
+
+    queue_mode:
+      "B"   — Verify: Qwen=high AND visual_type in QUEUE_B_TYPES
+      "C"   — Rescue: Qwen=low/medium AND visual_type in QUEUE_C_TYPES
+      "BC"  — Day 1: B + C combined
+      "all" — All entries without Gemini pass (original behaviour)
+    """
     queue = []
     for path, data in state.get("processed", {}).items():
         if not isinstance(data, dict):
@@ -159,9 +173,21 @@ def build_queue(state: dict, high_only: bool = True) -> list[str]:
         if data.get("gemini"):
             continue
         rel = data.get("result", {}).get("relevance", "low")
-        if high_only and rel not in ("high", "critical"):
-            continue
-        queue.append(path)
+        vt  = data.get("result", {}).get("visual_type", "unknown")
+
+        if queue_mode == "B":
+            if rel in ("high", "critical") and vt in QUEUE_B_TYPES:
+                queue.append(path)
+        elif queue_mode == "C":
+            if rel in ("low", "medium") and vt in QUEUE_C_TYPES:
+                queue.append(path)
+        elif queue_mode == "BC":
+            is_b = rel in ("high", "critical") and vt in QUEUE_B_TYPES
+            is_c = rel in ("low", "medium") and vt in QUEUE_C_TYPES
+            if is_b or is_c:
+                queue.append(path)
+        else:  # "all"
+            queue.append(path)
     return queue
 
 
@@ -173,8 +199,8 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit",   type=int, default=DAILY_LIMIT)
     parser.add_argument("--status",  action="store_true")
-    parser.add_argument("--all-relevance", action="store_true",
-                        help="Process medium/low too (default: high only)")
+    parser.add_argument("--queue", choices=["B","C","BC","all"], default="all",
+                        help="B=verify weak categories, C=rescue low/med, BC=Day1 (default: all)")
     args = parser.parse_args()
 
     if not args.dry_run and not args.status:
@@ -185,15 +211,14 @@ def main():
 
     # ── Status mode ──────────────────────────────────────────────────────────
     if args.status:
-        total   = len(processed)
-        done    = sum(1 for v in processed.values() if isinstance(v,dict) and v.get("gemini"))
-        pending = total - done
-        high    = sum(1 for v in processed.values()
-                      if isinstance(v,dict) and not v.get("gemini")
-                      and v.get("result",{}).get("relevance") in ("high","critical"))
+        total = len(processed)
+        done  = sum(1 for v in processed.values() if isinstance(v,dict) and v.get("gemini"))
         print(f"Total entries  : {total}")
         print(f"Gemini done    : {done}")
-        print(f"Pending        : {pending}  (high-relevance: {high})")
+        print(f"Pending        : {total - done}")
+        print(f"  Queue B      : {len(build_queue(state, 'B'))}  (verify: high+weak categories)")
+        print(f"  Queue C      : {len(build_queue(state, 'C'))}  (rescue: low/med miscat categories)")
+        print(f"  Queue A      : skipped by design  (trust Qwen on product/on_model/packaging)")
         print(f"Today's usage  : {daily_used(state)}/{DAILY_LIMIT}")
         return
 
@@ -208,11 +233,10 @@ def main():
     lock_fd.flush()
 
     # ── Build queue ───────────────────────────────────────────────────────────
-    high_only = not args.all_relevance
-    queue = build_queue(state, high_only=high_only)
+    queue = build_queue(state, queue_mode=args.queue)
     remaining_budget = min(args.limit, DAILY_LIMIT) - daily_used(state)
 
-    log(f"Queue: {len(queue)} images  |  budget: {remaining_budget}  |  high-only: {high_only}")
+    log(f"Queue: {len(queue)} images  |  mode: --queue {args.queue}  |  budget: {remaining_budget}")
 
     if remaining_budget <= 0:
         log("Daily budget exhausted. Run again tomorrow.")
