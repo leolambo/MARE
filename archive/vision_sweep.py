@@ -221,6 +221,8 @@ def get_tail_candidates(state: dict) -> list[str]:
     return candidates
 
 
+MAX_ITEM_RETRIES = 2  # mark as skipped after this many 400/non-rate-limit failures
+
 def process_tail(dry_run: bool = False):
     """Continuous polling mode to process Qwen outputs."""
     log("Starting Gemini tail process (waiting for Qwen results)...")
@@ -231,6 +233,8 @@ def process_tail(dry_run: bool = False):
         state["daily_counts"] = {}
         atomic_save_state(state)
     
+    # Per-run failure counter — prevents infinite retry loops on bad images
+    failure_counts: dict[str, int] = {}
     consecutive_empty_loops = 0
     
     while True:
@@ -315,11 +319,27 @@ def process_tail(dry_run: bool = False):
                 try:
                     result = call_gemini(str(full_path))
                     time.sleep(DELAY_BETWEEN_REQUESTS)
+                    failure_counts.pop(path, None)  # reset on success
                 except Exception as e:
-                    log(f"  ❌ Error calling Gemini: {e}")
-                    # If rate limited, maybe wait longer?
-                    if "RATE_LIMITED" in str(e):
+                    err_str = str(e)
+                    log(f"  ❌ Error calling Gemini: {err_str[:120]}")
+                    if "RATE_LIMITED" in err_str:
+                        log("  ⏳ Rate limited — sleeping 60s")
                         time.sleep(60)
+                        continue  # don't count rate limits as failures
+                    # Non-rate-limit error (400 invalid image, timeout, etc.)
+                    failure_counts[path] = failure_counts.get(path, 0) + 1
+                    if failure_counts[path] >= MAX_ITEM_RETRIES:
+                        log(f"  ⚠️ Skipping after {MAX_ITEM_RETRIES} failures: {path}")
+                        state = atomic_load_state()
+                        if path in state["processed"]:
+                            state["processed"][path]["gemini"] = {
+                                "skipped": True,
+                                "reason": f"Failed {MAX_ITEM_RETRIES}x: {err_str[:120]}",
+                                "marked_at": datetime.now().isoformat(),
+                            }
+                            atomic_save_state(state)
+                        failure_counts.pop(path, None)
                     continue
 
             # Update State
