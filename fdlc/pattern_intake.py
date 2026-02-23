@@ -37,6 +37,7 @@ DEFAULT_MOCK_ANSWERS: Dict[str, Any] = {
     "hem_width_per_leg": 8.0,
     "ease_preference": "standard",
     "pipeline_mode": "both",
+    "tech_pack_path": "",
     "additional_notes": "",
 }
 
@@ -275,6 +276,21 @@ def collect_phase1(metadata: Dict[str, Any], dry_run: bool = False) -> Dict[str,
         default="both",
         dry_run=dry_run,
     )
+    answers["tech_pack_path"] = ""
+    if str(answers["pipeline_mode"]).strip().lower() in ("parametric", "both", "b"):
+        has_tech_pack = prompt_choice(
+            "Do you have a tech pack image for ratio extraction? (y/n)",
+            ["y", "n"],
+            default="n",
+            dry_run=dry_run,
+        )
+        if has_tech_pack == "y":
+            answers["tech_pack_path"] = prompt_text(
+                "Tech pack image path",
+                default=None,
+                required=True,
+                dry_run=dry_run,
+            )
     answers["additional_notes"] = prompt_text("Additional notes (optional)", default="", required=False, dry_run=dry_run)
     return answers
 
@@ -885,6 +901,16 @@ def render_markdown(design_name: str, today: str, phase1: Dict[str, Any], confir
     for key, value in measurements_rows:
         md.append(f"| {key} | {value} |")
 
+    if phase1.get("tech_pack_path"):
+        md.extend(
+            [
+                "",
+                "## Tech Pack",
+                f"- Path: `{phase1['tech_pack_path']}`",
+                "- Note: `parametric_gen.py` will use this image for Gemini ratio extraction.",
+            ]
+        )
+
     if phase1.get("additional_notes"):
         md.extend(["", "## Intake Notes", phase1["additional_notes"]])
 
@@ -977,19 +1003,129 @@ def ask_to_continue_without_ai(dry_run: bool = False) -> bool:
             return False
 
 
+def parse_phase1_from_intake_markdown(intake_path: Path) -> Dict[str, Any]:
+    if not intake_path.exists():
+        raise FileNotFoundError(f"Missing intake file: {intake_path}")
+
+    parsed: Dict[str, Any] = {"tech_pack_path": ""}
+    in_tech_pack = False
+
+    for raw_line in intake_path.read_text().splitlines():
+        line = raw_line.strip()
+
+        if line.startswith("**Size:**"):
+            parsed["target_size"] = line.split(":", 1)[1].strip()
+            continue
+        if line.startswith("**Pipeline mode:**"):
+            parsed["pipeline_mode"] = line.split(":", 1)[1].strip()
+            continue
+
+        if line.startswith("## "):
+            in_tech_pack = line.lower() == "## tech pack"
+            continue
+        if in_tech_pack and line.startswith("- Path:"):
+            value = line.split(":", 1)[1].strip().strip("`")
+            parsed["tech_pack_path"] = value
+            continue
+
+        if line.startswith("|") and line.endswith("|"):
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if len(cells) != 2:
+                continue
+            key = cells[0].lower()
+            value = cells[1].replace('"', "").strip()
+            field_map = {
+                "waist": "waist",
+                "hip": "hip",
+                "inseam": "inseam",
+                "rise - front": "rise_front",
+                "rise - back": "rise_back",
+                "hem width per leg": "hem_width_per_leg",
+                "ease": "ease_preference",
+                "garment type": "garment_type",
+            }
+            if key in field_map:
+                target = field_map[key]
+                if target in ("ease_preference", "garment_type"):
+                    parsed[target] = value
+                else:
+                    try:
+                        parsed[target] = float(value)
+                    except ValueError:
+                        pass
+
+    required = [
+        "waist",
+        "hip",
+        "inseam",
+        "rise_front",
+        "rise_back",
+        "hem_width_per_leg",
+    ]
+    missing = [k for k in required if k not in parsed]
+    if missing:
+        raise ValueError(f"Missing measurements in intake markdown: {', '.join(missing)}")
+    return parsed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pattern intake workflow for MARE designs")
     parser.add_argument("--name", required=True, help="Design slug (e.g. star-grid-denim-pants)")
     parser.add_argument("--force", action="store_true", help="Proceed even if status is not concept/approved")
     parser.add_argument("--dry-run", action="store_true", help="Run full flow without file writes or API calls")
+    parser.add_argument(
+        "--recalculate",
+        action="store_true",
+        help="Skip intake/debate and re-run Mode B solver from existing pattern-intake.md",
+    )
     parser.add_argument("--no-debate", action="store_true", help="Skip adversarial debate and use single-pass suggestions")
     parser.add_argument("--max-rounds", type=int, default=MAX_DEBATE_ROUNDS_DEFAULT, help="Maximum debate rounds (default: 3)")
     args = parser.parse_args()
 
     design_dir, metadata, readme, spec = load_design(args.name, dry_run=args.dry_run)
-    validate_status(metadata, force=args.force)
+    if not args.recalculate:
+        validate_status(metadata, force=args.force)
+
+    if args.recalculate:
+        intake_path = design_dir / "pattern-intake.md"
+        try:
+            prior_phase1 = parse_phase1_from_intake_markdown(intake_path)
+        except Exception as exc:
+            print(f"❌ Recalculate failed while reading {intake_path}: {exc}")
+            sys.exit(1)
+
+        print("\n🔁 Recalculate mode: skipping Phase 1 intake and AI debate.")
+        print("Using measurements from existing pattern-intake.md:")
+        print(f"- Waist: {prior_phase1['waist']}\"")
+        print(f"- Hip: {prior_phase1['hip']}\"")
+        print(f"- Inseam: {prior_phase1['inseam']}\"")
+        print(f"- Rise front/back: {prior_phase1['rise_front']}\" / {prior_phase1['rise_back']}\"")
+        print(f"- Hem width per leg: {prior_phase1['hem_width_per_leg']}\"")
+
+        parametric_gen_path = Path(__file__).resolve().parent / "pattern_engine/mode_b/parametric_gen.py"
+        cmd = [
+            sys.executable,
+            str(parametric_gen_path),
+            design_dir.name,
+            "--recalculate",
+        ]
+        if prior_phase1.get("tech_pack_path"):
+            cmd.extend(["--tech-pack", str(prior_phase1["tech_pack_path"])])
+        if args.dry_run:
+            cmd.append("--dry-run")
+
+        print("\nCalling Mode B generator:")
+        print("$ " + " ".join(cmd))
+        result = subprocess.run(cmd, check=False)
+        if result.returncode != 0:
+            print(f"❌ parametric_gen.py failed with exit code {result.returncode}")
+            sys.exit(result.returncode)
+        print("✅ Recalculate complete: Mode B panels regenerated from updated intake values.")
+        return
 
     phase1 = collect_phase1(metadata, dry_run=args.dry_run)
+    if phase1.get("tech_pack_path"):
+        print("ℹ parametric_gen.py will use this image for Gemini ratio extraction.")
 
     try:
         if args.no_debate:
