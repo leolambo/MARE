@@ -328,14 +328,26 @@ def main() -> int:
 
     import ezdxf  # type: ignore
 
-    doc = ezdxf.new("R12")
+    # R2000 (AC1015) — better CLO3D compatibility than R12
+    doc = ezdxf.new("R2000")
     msp = doc.modelspace()
+
+    # Set units to inches ($INSUNITS=1) so CLO3D interprets correctly
+    doc.header["$INSUNITS"] = 1  # 1 = inches
 
     rect_panel_grid.draw(msp, dims, x_offset=0.0, y_offset=0.0)
 
     leg_spacing = 2.0
     right_start_x = float(dims["total_width"]) + leg_spacing
-    rect_panel_grid.draw(msp, _mirrored_dims(dims), x_offset=right_start_x, y_offset=0.0)
+    right_dims = _mirrored_dims(dims)
+    rect_panel_grid.draw(msp, right_dims, x_offset=right_start_x, y_offset=0.0)
+
+    # Set drawing extents explicitly — CLO3D uses these to zoom/fit on import
+    total_w = right_start_x + float(dims["total_width"])
+    total_h = float(dims["total_height"])
+    margin = float(dims.get("seam_allowance", 0.625))
+    doc.header["$EXTMIN"] = (-margin, -margin, 0)
+    doc.header["$EXTMAX"] = (total_w + margin, total_h + margin, 0)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     doc.saveas(str(output_path))

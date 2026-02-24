@@ -80,33 +80,49 @@ def solve(
     }
 
 
-def _rounded_rect(block, x0: float, y0: float, width: float, height: float, radius: float, layer: str) -> None:
-    """Draw exact rounded rectangle using 4 lines + 4 quarter-circle arcs."""
+def _rounded_rect_lwpoly(msp, x0: float, y0: float, width: float, height: float, radius: float, layer: str) -> None:
+    """
+    Draw a rounded rectangle as a single closed LWPOLYLINE with bulge values.
+
+    This is the DXF-AAMA/ASTM compatible format — CLO3D identifies each closed
+    LWPOLYLINE as one pattern piece boundary. Individual LINE+ARC entities are
+    treated as unrecognized baselines and don't form pattern pieces.
+
+    Bulge encoding: bulge = tan(arc_angle / 4)
+    For a CCW quarter-circle (90°): bulge = tan(22.5°) ≈ 0.41421356
+    """
     x1 = x0 + width
     y1 = y0 + height
     r = min(max(radius, 0.0), min(width, height) / 2.0)
+    ARC_BULGE = 0.41421356  # tan(π/8) — CCW quarter-circle
 
-    block.add_line((x0 + r, y0), (x1 - r, y0), dxfattribs={"layer": layer})
-    block.add_line((x1, y0 + r), (x1, y1 - r), dxfattribs={"layer": layer})
-    block.add_line((x1 - r, y1), (x0 + r, y1), dxfattribs={"layer": layer})
-    block.add_line((x0, y1 - r), (x0, y0 + r), dxfattribs={"layer": layer})
+    # 8 vertices in CCW order: 4 straight edges + 4 corner arcs (via bulge)
+    # bulge lives at the START vertex of each arc segment
+    points = [
+        (x0 + r, y0,      0.0),        # bottom edge start → straight
+        (x1 - r, y0,      ARC_BULGE),  # bottom edge end   → CCW arc (bottom-right corner)
+        (x1,     y0 + r,  0.0),        # right edge start  → straight
+        (x1,     y1 - r,  ARC_BULGE),  # right edge end    → CCW arc (top-right corner)
+        (x1 - r, y1,      0.0),        # top edge start    → straight
+        (x0 + r, y1,      ARC_BULGE),  # top edge end      → CCW arc (top-left corner)
+        (x0,     y1 - r,  0.0),        # left edge start   → straight
+        (x0,     y0 + r,  ARC_BULGE),  # left edge end     → CCW arc (bottom-left corner) → back to start
+    ]
 
-    block.add_arc(center=(x1 - r, y0 + r), radius=r, start_angle=270.0, end_angle=360.0, dxfattribs={"layer": layer})
-    block.add_arc(center=(x1 - r, y1 - r), radius=r, start_angle=0.0, end_angle=90.0, dxfattribs={"layer": layer})
-    block.add_arc(center=(x0 + r, y1 - r), radius=r, start_angle=90.0, end_angle=180.0, dxfattribs={"layer": layer})
-    block.add_arc(center=(x0 + r, y0 + r), radius=r, start_angle=180.0, end_angle=270.0, dxfattribs={"layer": layer})
+    # format="xyb" = x, y, bulge per vertex
+    msp.add_lwpolyline(
+        [(x, y, bulge) for x, y, bulge in points],
+        format="xyb",
+        dxfattribs={"layer": layer, "closed": True},
+    )
 
 
 def draw(msp, dims: dict, x_offset: float = 0.0, y_offset: float = 0.0):
     """
-    Draw all panels into an ezdxf ModelSpace.
-
-    Each panel is represented as a named BLOCK (PANEL_R{row}_C{col}) and inserted at
-    the computed panel origin offset by x_offset/y_offset.
+    Draw all panels directly into an ezdxf ModelSpace (no BLOCK/INSERT).
+    CLO3D requires geometry in modelspace — block references are ignored on import.
+    Each panel is drawn as absolute LINE + ARC entities at its grid position.
     """
-    import ezdxf  # type: ignore  # noqa: F401
-
-    doc = msp.doc
     panel_w = float(dims["panel_width"])
     panel_h = float(dims["panel_height"])
     corner_r = float(dims["corner_radius"])
@@ -118,33 +134,27 @@ def draw(msp, dims: dict, x_offset: float = 0.0, y_offset: float = 0.0):
     text_height = max(0.15, min(panel_w, panel_h) * 0.12)
 
     for piece in dims.get("pieces", []):
-        row = int(piece["row"])
-        col = int(piece["col"])
-        block_name = f"PANEL_R{row}_C{col}"
+        px = x_offset + float(piece["x_origin"])
+        py = y_offset + float(piece["y_origin"])
 
-        if block_name in doc.blocks:
-            block = doc.blocks.get(block_name)
-        else:
-            block = doc.blocks.new(name=block_name)
-            _rounded_rect(block, 0.0, 0.0, panel_w, panel_h, corner_r, layer="14")
-            _rounded_rect(
-                block,
-                -CUTLINE_OFFSET_IN,
-                -CUTLINE_OFFSET_IN,
-                cut_w,
-                cut_h,
-                cut_r,
-                layer="87",
-            )
-            label = str(piece.get("id", block_name))
-            block.add_text(
-                label,
-                dxfattribs={"layer": "1", "height": text_height},
-            ).set_placement((panel_w / 2.0, panel_h / 2.0), align=_TEXT_ALIGN)
+        # Sewing line — closed LWPOLYLINE, AAMA Layer 1 (piece outline)
+        _rounded_rect_lwpoly(msp, px, py, panel_w, panel_h, corner_r, layer="1")
 
-        insert_x = x_offset + float(piece["x_origin"])
-        insert_y = y_offset + float(piece["y_origin"])
-        msp.add_blockref(block_name, (insert_x, insert_y))
+        # Cutting line — closed LWPOLYLINE, AAMA Layer 8 (cut line, offset outward)
+        _rounded_rect_lwpoly(
+            msp,
+            px - CUTLINE_OFFSET_IN,
+            py - CUTLINE_OFFSET_IN,
+            cut_w, cut_h, cut_r,
+            layer="8",
+        )
+
+        # Panel label (layer 1)
+        label = str(piece.get("id", f"R{piece['row']}C{piece['col']}"))
+        msp.add_text(
+            label,
+            dxfattribs={"layer": "1", "height": text_height},
+        ).set_placement((px + panel_w / 2.0, py + panel_h / 2.0), align=_TEXT_ALIGN)
 
 
 if __name__ == "__main__":
