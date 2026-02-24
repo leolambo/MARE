@@ -194,11 +194,15 @@ def _normalize_ratios(ratios: dict) -> dict:
         "panels_per_col": int(ratios["panels_per_col"]),
         "gap_ratio": float(ratios["gap_ratio"]),
         "corner_radius_ratio": float(ratios["corner_radius_ratio"]),
+        # wrap_factor: 1.0 = front face only, 2.0 = full leg circumference (Option A)
+        "wrap_factor": float(ratios.get("wrap_factor", 1.0)),
     }
     if out["panels_per_row"] < 1 or out["panels_per_col"] < 1:
         raise ValueError("panels_per_row and panels_per_col must be >= 1")
     if out["gap_ratio"] < 0 or out["corner_radius_ratio"] < 0:
         raise ValueError("gap_ratio and corner_radius_ratio must be >= 0")
+    if out["wrap_factor"] <= 0:
+        raise ValueError("wrap_factor must be > 0")
     return out
 
 
@@ -365,8 +369,12 @@ def main() -> int:
 
     assert ratios is not None
 
-    leg_width = float(measurements["hem_width_per_leg"])
+    # wrap_factor=2.0 (Option A): panels tile full leg circumference,
+    # not just the front face. leg_width × 2 ≈ full circumference for wide-leg.
+    leg_width = float(measurements["hem_width_per_leg"]) * ratios["wrap_factor"]
     leg_length = float(measurements["inseam"])
+    if ratios["wrap_factor"] != 1.0:
+        print(f"Wrap mode: factor={ratios['wrap_factor']} → effective leg_width={leg_width:.3f}\"")
     corner_radius = _derive_corner_radius(
         leg_width=leg_width,
         cols=ratios["panels_per_row"],
