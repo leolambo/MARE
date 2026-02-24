@@ -223,6 +223,75 @@ def _mirrored_dims(dims: dict) -> dict:
     return mirrored
 
 
+def _rounded_rect_svg_path(x0: float, y0: float, w: float, h: float, r: float, n_arc: int = 12) -> str:
+    """Return an SVG path string for a rounded rectangle (tessellated arcs, mm coords)."""
+    import math
+    x1, y1 = x0 + w, y0 + h
+    r = min(max(r, 0.0), min(w, h) / 2.0)
+    pts = []
+
+    def add_arc(cx: float, cy: float, start_deg: float, end_deg: float) -> None:
+        for i in range(1, n_arc + 1):
+            ang = math.radians(start_deg + (end_deg - start_deg) * i / n_arc)
+            pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+
+    pts.append((x0 + r, y0))
+    pts.append((x1 - r, y0))
+    add_arc(x1 - r, y0 + r, 270, 360)
+    pts.append((x1,   y1 - r))
+    add_arc(x1 - r, y1 - r,   0,  90)
+    pts.append((x0 + r, y1))
+    add_arc(x0 + r, y1 - r,  90, 180)
+    pts.append((x0,   y0 + r))
+    add_arc(x0 + r, y0 + r, 180, 270)
+
+    d = f"M {pts[0][0]:.3f},{pts[0][1]:.3f} " + " ".join(f"L {x:.3f},{y:.3f}" for x, y in pts[1:]) + " Z"
+    return d
+
+
+def _write_svg_preview(output_path: Path, dims: dict, right_dims: dict, right_x_offset: float, scale: float = 1.0) -> None:
+    """Write an SVG preview of both legs for visual shape verification."""
+    MM = scale  # scale factor applied to all coords (already in mm if scale=25.4)
+
+    panel_w = float(dims["panel_width"]) * MM
+    panel_h = float(dims["panel_height"]) * MM
+    corner_r = float(dims["corner_radius"]) * MM
+    cut_off = 3.0 / 25.4 * MM  # CUTLINE_OFFSET_IN in mm
+
+    right_offset_mm = right_x_offset * MM
+    total_w = right_offset_mm + float(dims["total_width"]) * MM
+    total_h = float(dims["total_height"]) * MM
+
+    pad = 10.0
+    vb_w = total_w + pad * 2
+    vb_h = total_h + pad * 2
+
+    paths = []
+
+    def add_panels(piece_list: list, x_off: float) -> None:
+        for piece in piece_list:
+            px = (x_off + float(piece["x_origin"])) * MM + pad
+            py = float(piece["y_origin"]) * MM + pad
+            # sewing line
+            d = _rounded_rect_svg_path(px, py, panel_w, panel_h, corner_r)
+            paths.append(f'  <path d="{d}" fill="white" stroke="#222" stroke-width="1.2"/>')
+            # cutting line
+            d2 = _rounded_rect_svg_path(px - cut_off, py - cut_off, panel_w + 2*cut_off, panel_h + 2*cut_off, corner_r + cut_off)
+            paths.append(f'  <path d="{d2}" fill="none" stroke="#888" stroke-width="0.6" stroke-dasharray="3,2"/>')
+
+    add_panels(dims.get("pieces", []), 0.0)
+    add_panels(right_dims.get("pieces", []), right_x_offset)
+
+    svg = "\n".join([
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {vb_w:.1f} {vb_h:.1f}" width="{vb_w:.0f}" height="{vb_h:.0f}">',
+        f'  <rect width="{vb_w:.1f}" height="{vb_h:.1f}" fill="#e8e8e8"/>',
+        *paths,
+        "</svg>",
+    ])
+    output_path.write_text(svg)
+    print(f"Preview SVG: {output_path}")
+
+
 def _ensure_ezdxf() -> None:
     try:
         import ezdxf  # noqa: F401
@@ -245,6 +314,11 @@ def main() -> int:
         "--draft",
         action="store_true",
         help="Draft mode: read from patterns/mode_b/draft/pattern-intake-draft.md, write DXF to patterns/mode_b/draft/",
+    )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Generate an SVG preview alongside the DXF for visual shape verification (no CLO3D needed)",
     )
     args = parser.parse_args()
 
@@ -352,6 +426,10 @@ def main() -> int:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     doc.saveas(str(output_path))
+
+    if args.preview:
+        preview_path = output_path.with_suffix(".svg")
+        _write_svg_preview(preview_path, dims, right_dims, right_start_x, scale=MM_PER_IN)
 
     total_panels = len(dims.get("pieces", [])) * 2
     print(f"Design: {design_slug}")

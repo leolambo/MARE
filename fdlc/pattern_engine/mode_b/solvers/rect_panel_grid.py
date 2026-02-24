@@ -80,41 +80,41 @@ def solve(
     }
 
 
-def _rounded_rect_lwpoly(msp, x0: float, y0: float, width: float, height: float, radius: float, layer: str) -> None:
+def _rounded_rect_lwpoly(msp, x0: float, y0: float, width: float, height: float, radius: float, layer: str, n_arc: int = 12) -> None:
     """
-    Draw a rounded rectangle as a single closed LWPOLYLINE with bulge values.
+    Draw a rounded rectangle as a closed LWPOLYLINE with tessellated arcs.
 
-    This is the DXF-AAMA/ASTM compatible format — CLO3D identifies each closed
-    LWPOLYLINE as one pattern piece boundary. Individual LINE+ARC entities are
-    treated as unrecognized baselines and don't form pattern pieces.
+    Uses straight-line vertex approximation of each quarter-circle corner
+    (n_arc segments per 90°) — avoids LWPOLYLINE bulge values which CLO3D
+    ignores, rendering octagonal chamfers instead of smooth curves.
 
-    Bulge encoding: bulge = tan(arc_angle / 4)
-    For a CCW quarter-circle (90°): bulge = tan(22.5°) ≈ 0.41421356
+    n_arc=12 gives <0.01" error on typical corner radii.
     """
+    import math
     x1 = x0 + width
     y1 = y0 + height
     r = min(max(radius, 0.0), min(width, height) / 2.0)
-    ARC_BULGE = 0.41421356  # tan(π/8) — CCW quarter-circle
 
-    # 8 vertices in CCW order: 4 straight edges + 4 corner arcs (via bulge)
-    # bulge lives at the START vertex of each arc segment
-    points = [
-        (x0 + r, y0,      0.0),        # bottom edge start → straight
-        (x1 - r, y0,      ARC_BULGE),  # bottom edge end   → CCW arc (bottom-right corner)
-        (x1,     y0 + r,  0.0),        # right edge start  → straight
-        (x1,     y1 - r,  ARC_BULGE),  # right edge end    → CCW arc (top-right corner)
-        (x1 - r, y1,      0.0),        # top edge start    → straight
-        (x0 + r, y1,      ARC_BULGE),  # top edge end      → CCW arc (top-left corner)
-        (x0,     y1 - r,  0.0),        # left edge start   → straight
-        (x0,     y0 + r,  ARC_BULGE),  # left edge end     → CCW arc (bottom-left corner) → back to start
-    ]
+    pts: List[tuple] = []
 
-    # format="xyb" = x, y, bulge per vertex
-    msp.add_lwpolyline(
-        [(x, y, bulge) for x, y, bulge in points],
-        format="xyb",
-        dxfattribs={"layer": layer, "closed": True},
-    )
+    def add_arc(cx: float, cy: float, start_deg: float, end_deg: float) -> None:
+        """Append n_arc points for a quarter-circle arc (start vertex added by caller)."""
+        for i in range(1, n_arc + 1):
+            angle = math.radians(start_deg + (end_deg - start_deg) * i / n_arc)
+            pts.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
+
+    # CCW traversal starting at bottom-left, moving right along bottom edge:
+    pts.append((x0 + r, y0))               # bottom edge start
+    pts.append((x1 - r, y0))               # bottom edge end
+    add_arc(x1 - r, y0 + r, 270, 360)      # bottom-right corner
+    pts.append((x1,   y1 - r))             # right edge end
+    add_arc(x1 - r, y1 - r,   0,  90)      # top-right corner
+    pts.append((x0 + r, y1))               # top edge end
+    add_arc(x0 + r, y1 - r,  90, 180)      # top-left corner
+    pts.append((x0,   y0 + r))             # left edge end
+    add_arc(x0 + r, y0 + r, 180, 270)      # bottom-left corner (closes back to start)
+
+    msp.add_lwpolyline(pts, format="xy", dxfattribs={"layer": layer, "closed": True})
 
 
 def draw(msp, dims: dict, x_offset: float = 0.0, y_offset: float = 0.0, scale: float = 1.0):
