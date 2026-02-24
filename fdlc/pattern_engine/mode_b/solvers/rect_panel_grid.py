@@ -117,25 +117,26 @@ def _rounded_rect_lwpoly(msp, x0: float, y0: float, width: float, height: float,
     )
 
 
-def draw(msp, dims: dict, x_offset: float = 0.0, y_offset: float = 0.0):
+def draw(msp, dims: dict, x_offset: float = 0.0, y_offset: float = 0.0, scale: float = 1.0):
     """
     Draw all panels directly into an ezdxf ModelSpace (no BLOCK/INSERT).
     CLO3D requires geometry in modelspace — block references are ignored on import.
     Each panel is drawn as absolute LINE + ARC entities at its grid position.
     """
-    panel_w = float(dims["panel_width"])
-    panel_h = float(dims["panel_height"])
-    corner_r = float(dims["corner_radius"])
+    panel_w = float(dims["panel_width"]) * scale
+    panel_h = float(dims["panel_height"]) * scale
+    corner_r = float(dims["corner_radius"]) * scale
 
-    cut_w = panel_w + (2.0 * CUTLINE_OFFSET_IN)
-    cut_h = panel_h + (2.0 * CUTLINE_OFFSET_IN)
-    cut_r = corner_r + CUTLINE_OFFSET_IN
+    cut_offset = CUTLINE_OFFSET_IN * scale
+    cut_w = panel_w + (2.0 * cut_offset)
+    cut_h = panel_h + (2.0 * cut_offset)
+    cut_r = corner_r + cut_offset
 
-    text_height = max(0.15, min(panel_w, panel_h) * 0.12)
+    text_height = max(0.15 * scale, min(panel_w, panel_h) * 0.12)
 
     for piece in dims.get("pieces", []):
-        px = x_offset + float(piece["x_origin"])
-        py = y_offset + float(piece["y_origin"])
+        px = (x_offset + float(piece["x_origin"])) * scale
+        py = (y_offset + float(piece["y_origin"])) * scale
 
         # Sewing line — closed LWPOLYLINE, AAMA Layer 1 (piece outline)
         _rounded_rect_lwpoly(msp, px, py, panel_w, panel_h, corner_r, layer="1")

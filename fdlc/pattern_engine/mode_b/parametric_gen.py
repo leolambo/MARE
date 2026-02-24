@@ -332,20 +332,21 @@ def main() -> int:
     doc = ezdxf.new("R2000")
     msp = doc.modelspace()
 
-    # Set units to inches ($INSUNITS=1) so CLO3D interprets correctly
-    doc.header["$INSUNITS"] = 1  # 1 = inches
+    # CLO3D works in millimeters — output all coordinates in mm
+    MM_PER_IN = 25.4
+    doc.header["$INSUNITS"] = 4  # 4 = millimeters
 
-    rect_panel_grid.draw(msp, dims, x_offset=0.0, y_offset=0.0)
+    rect_panel_grid.draw(msp, dims, x_offset=0.0, y_offset=0.0, scale=MM_PER_IN)
 
-    leg_spacing = 2.0
+    leg_spacing = 2.0  # inches between left and right leg layouts
     right_start_x = float(dims["total_width"]) + leg_spacing
     right_dims = _mirrored_dims(dims)
-    rect_panel_grid.draw(msp, right_dims, x_offset=right_start_x, y_offset=0.0)
+    rect_panel_grid.draw(msp, right_dims, x_offset=right_start_x, y_offset=0.0, scale=MM_PER_IN)
 
-    # Set drawing extents explicitly — CLO3D uses these to zoom/fit on import
-    total_w = right_start_x + float(dims["total_width"])
-    total_h = float(dims["total_height"])
-    margin = float(dims.get("seam_allowance", 0.625))
+    # Set drawing extents in mm
+    total_w = (right_start_x + float(dims["total_width"])) * MM_PER_IN
+    total_h = float(dims["total_height"]) * MM_PER_IN
+    margin = float(dims.get("seam_allowance", 0.625)) * MM_PER_IN
     doc.header["$EXTMIN"] = (-margin, -margin, 0)
     doc.header["$EXTMAX"] = (total_w + margin, total_h + margin, 0)
 
