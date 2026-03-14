@@ -5,9 +5,15 @@ Run: cd ~/base/mare-pipeline && python3 -m pytest fdlc/pattern_engine/mode_b/sol
 
 import math
 import pytest
-from fdlc.pattern_engine.mode_b.solvers.pant_block import (
-    solve, to_dxf, DEFAULT_CONSTRUCTION, DEFAULT_EASE,
-    _cbez, _qbez, _polyline_length, _dist,
+from fdlc.pattern_engine.mode_b.solvers.dxf_export import to_dxf
+from fdlc.pattern_engine.mode_b.solvers.pant_block import solve
+from fdlc.pattern_engine.mode_b.solvers.pattern_utils import (
+    DEFAULT_CONSTRUCTION,
+    DEFAULT_EASE,
+    _cbez,
+    _dist,
+    _polyline_length,
+    _qbez,
 )
 
 # ── Fixtures ──────────────────────────────────────────────────────────────

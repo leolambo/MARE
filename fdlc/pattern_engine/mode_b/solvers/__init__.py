@@ -1,3 +1,11 @@
-from . import rect_panel_grid, pant_block
+"""Mode B solver modules."""
 
-__all__ = ["rect_panel_grid", "pant_block"]
+from . import annotate_dxf, dxf_export, pant_block, pattern_utils, rect_panel_grid
+
+__all__ = [
+    "annotate_dxf",
+    "dxf_export",
+    "pant_block",
+    "pattern_utils",
+    "rect_panel_grid",
+]

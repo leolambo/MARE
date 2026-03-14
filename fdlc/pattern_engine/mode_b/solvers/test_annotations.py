@@ -9,11 +9,19 @@ import math
 import os
 import pytest
 import ezdxf
-from fdlc.pattern_engine.mode_b.solvers.pant_block import (
-    solve, to_dxf, DEFAULT_CONSTRUCTION, DEFAULT_EASE,
-    _vnorm, _vperp, _vmid, _nearest_index, _seam_midpoint,
-    _add_notch_mark, _add_grain_arrowhead, _add_seam_number,
+from fdlc.pattern_engine.mode_b.solvers.annotate_dxf import (
+    _add_grain_arrowhead,
+    _add_notch_mark,
+    _add_seam_number,
+    _nearest_index,
+    _seam_midpoint,
+    _vmid,
+    _vnorm,
+    _vperp,
 )
+from fdlc.pattern_engine.mode_b.solvers.dxf_export import to_dxf
+from fdlc.pattern_engine.mode_b.solvers.pant_block import solve
+from fdlc.pattern_engine.mode_b.solvers.pattern_utils import DEFAULT_CONSTRUCTION, DEFAULT_EASE
 
 SAMPLE = {
     "waist": 30.0, "hip": 52.0,
