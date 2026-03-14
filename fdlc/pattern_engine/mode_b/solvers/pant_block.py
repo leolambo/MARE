@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+"""Trouser block solver for Mode B parametric generation.
+v21 — validated via visual verification loop (see PATTERN-DRAFTING-FINDINGS.md)."""
+
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import ezdxf
+from ezdxf.math import offset_vertices_2d
+
+try:
+    from ezdxf.enums import TextEntityAlignment as _TEA
+    _TEXT_ALIGN = _TEA.MIDDLE_CENTER
+except ImportError:
+    _TEXT_ALIGN = "MIDDLE_CENTER"
+
+Point = Tuple[float, float]
+
+LAYER_CUT = "CUT"
+LAYER_SA = "SEAM_ALLOWANCE"
+LAYER_GRAIN = "GRAIN"
+LAYER_NOTCH = "NOTCH"
+LAYER_INTERNAL = "INTERNAL"
+LAYER_TEXT = "TEXT"
+
+DEFAULT_CONSTRUCTION = {
+    "seam_allowance": 0.625,
+    "hem_allowance": 1.5,
+    "waistband_width": 1.75,
+    "pocket_type": "slash",
+    "pocket_angle_deg": 30,
+    "back_pocket_type": "single_welt",
+    "fly_type": "standard_zip",
+    "dart_count_back": 0,
+}
+
+DEFAULT_EASE = {"waist": 1.0, "hip": 2.0, "thigh": 2.0}
+
+
+# ---------------------------------------------------------------------------
+# Bezier helpers
+# ---------------------------------------------------------------------------
+
+def _qbez(p0: Point, p1: Point, p2: Point, steps: int = 32) -> List[Point]:
+    """Quadratic bezier."""
+    return [((1-t)**2*p0[0]+2*(1-t)*t*p1[0]+t**2*p2[0],
+             (1-t)**2*p0[1]+2*(1-t)*t*p1[1]+t**2*p2[1])
+            for t in [i/steps for i in range(steps+1)]]
+
+
+def _cbez(p0: Point, p1: Point, p2: Point, p3: Point, steps: int = 40) -> List[Point]:
+    """Cubic bezier — preferred for anatomical curves (G1 continuity)."""
+    return [((1-t)**3*p0[0]+3*(1-t)**2*t*p1[0]+3*(1-t)*t**2*p2[0]+t**3*p3[0],
+             (1-t)**3*p0[1]+3*(1-t)**2*t*p1[1]+3*(1-t)*t**2*p2[1]+t**3*p3[1])
+            for t in [i/steps for i in range(steps+1)]]
+
+
+def _dist(a: Point, b: Point) -> float:
+    return math.hypot(b[0]-a[0], b[1]-a[1])
+
+
+def _polyline_length(points) -> float:
+    pts = list(points)
+    return sum(_dist(pts[i], pts[i+1]) for i in range(len(pts)-1))
+
+
+def _bbox(points) -> tuple:
+    pts = list(points)
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _closed_offset(poly: List[Point], offset: float) -> List[Point]:
+    pts = list(poly)
+    if pts[0] != pts[-1]:
+        pts = pts + [pts[0]]
+    result = list(offset_vertices_2d(pts, offset=offset, closed=True))
+    return [(float(x), float(y)) for x, y in result]
+
+
+# ---------------------------------------------------------------------------
+# Panel builders
+# ---------------------------------------------------------------------------
+
+def _build_front_panel(m: dict, c: dict, e: dict) -> dict:
+    """Build front trouser panel using validated v21 geometry."""
+    hip_y = 8.5
+    CROTCH_Y = float(m["front_rise"])
+    hem_y = float(m["outseam"])
+    knee_y = hem_y - float(m["inseam"]) * 0.52
+    
+    waist_half = float(m["waist"]) / 2.0
+    hip_half = float(m["hip"]) / 2.0
+    
+    # Panel widths — leg_opening is FLAT half-circumference (DO NOT halve again!)
+    f_waist = waist_half * 0.48 + 1.0         # ~8.0"
+    f_hip = hip_half * 0.48 + 0.5             # ~13.5"
+    f_hem = float(m["leg_opening"]) * 0.48    # ~11.3" for wide-leg
+    f_cext = hip_half * 0.125                 # ~3.25"
+    
+    # Key x positions
+    x_sh = f_hip        # side hip (widest)
+    x_sk = f_hem + 0.3  # side knee
+    x_se = f_hem         # side hem
+    
+    # Crotch tip: drops 1.0" below crotch line
+    ct = (-f_cext, CROTCH_Y + 1.0)
+    
+    # WAISTLINE: concave — CF dips, side rises
+    cf_w = (0, 0.75)
+    sw = (f_waist, -0.5)
+    wc = _cbez(cf_w, (f_waist*0.3, -0.8), (f_waist*0.65, -0.7), sw, 16)
+    
+    # CF SEAM: straight vertical x=0 from waist to crotch
+    cf_seam = [(0, cf_w[1] + i*(CROTCH_Y-cf_w[1])/10) for i in range(11)]
+    
+    # CROTCH J-CURVE: smooth cubic from (0, CROTCH_Y) to crotch tip
+    cc = _cbez((0, CROTCH_Y), (-f_cext*0.5, CROTCH_Y), (-f_cext, CROTCH_Y+0.1), ct, 32)
+    
+    # INSEAM: smooth cubic from crotch tip to (0, knee_y)
+    ic = _cbez(ct, (-f_cext*0.5, ct[1]+3), (0.1, knee_y-6), (0, knee_y), 32)
+    
+    # SIDE SEAM: smooth cubic curves
+    st = _cbez(sw, (x_sh*0.7, hip_y*0.3), (x_sh, hip_y*0.7), (x_sh, hip_y), 24)
+    sm = _cbez((x_sh, hip_y), (x_sh, hip_y+3), (x_sk, knee_y-5), (x_sk, knee_y), 24)
+    
+    # Measure seam lengths
+    inseam_len = _polyline_length(ic) + abs(hem_y - knee_y)
+    side_len = _polyline_length(st) + _polyline_length(sm) + math.hypot(x_sk-x_se, knee_y-hem_y)
+    
+    # Assemble outline
+    outline = list(wc)
+    outline += st[1:]
+    outline += sm[1:]
+    outline += [(x_se, hem_y), (0, hem_y), (0, knee_y)]
+    outline += list(reversed(ic))[1:]
+    outline += list(reversed(cc))[1:]
+    outline += list(reversed(cf_seam))[1:]
+    outline += [wc[0]]
+    
+    # Internal lines (pocket)
+    pocket_drop = 1.0
+    pocket_len = 6.5
+    pocket_angle = math.radians(c.get("pocket_angle_deg", 30))
+    pocket_a = (f_waist, -0.5 + pocket_drop)
+    pocket_b = (f_waist - math.cos(pocket_angle)*pocket_len,
+                -0.5 + pocket_drop + math.sin(pocket_angle)*pocket_len)
+    
+    x0, y0, x1, y1 = _bbox(outline)
+    grain_x = f_hem / 2.0
+    
+    return {
+        "name": "front_panel",
+        "count": 2,
+        "mirror": True,
+        "cut": outline,
+        "grainline": [(grain_x, hip_y), (grain_x, hem_y - 2.0)],
+        "internal_lines": [[pocket_a, pocket_b]],
+        "notches": [((x_sk, knee_y), "knee"), ((0, knee_y), "knee")],
+        "label_pos": ((x0+x1)/2, (y0+y1)/2),
+        "meta": {
+            "crotch_extension": f_cext,
+            "inseam_length": inseam_len,
+            "side_length": side_len,
+            "hem_width": f_hem,
+            "hip_width": f_hip,
+        },
+    }
+
+
+def _build_back_panel(m: dict, c: dict, e: dict, b_drop: float = 1.9) -> dict:
+    """Build back trouser panel using validated v21 geometry."""
+    hip_y = 8.5
+    CROTCH_Y = float(m["front_rise"])  # SHARED crotch line!
+    hem_y = float(m["outseam"])
+    knee_y = hem_y - float(m["inseam"]) * 0.52
+    
+    waist_half = float(m["waist"]) / 2.0
+    hip_half = float(m["hip"]) / 2.0
+    
+    b_waist = waist_half * 0.52 - 1.0
+    b_hip = hip_half * 0.52 + 1.5 - 3.4  # after side_tuck
+    b_hem = float(m["leg_opening"]) * 0.52
+    b_cext = hip_half * 0.125 + 1.5
+    
+    x_sh = b_hip
+    x_sk = b_hem + 0.3
+    x_se = b_hem
+    
+    # Crotch tip: drops b_drop below SHARED crotch line
+    ct = (-b_cext, CROTCH_Y + b_drop)
+    
+    # WAISTLINE: CB raised and shifted left
+    cf_w = (-2.0, -1.5)
+    sw = (b_waist - 2.0, -0.3)
+    wc = _cbez(cf_w, (cf_w[0]+b_waist*0.3, -1.2), (cf_w[0]+b_waist*0.7, -0.6), sw, 16)
+    
+    # CB SEAM + CROTCH: ONE continuous cubic (no kink at junction)
+    cb_to_crotch = _cbez(cf_w, (-1.0, CROTCH_Y*0.5), (-1.0, CROTCH_Y), ct, 48)
+    
+    # INSEAM
+    ic = _cbez(ct, (-b_cext*0.3, ct[1]+3), (0.1, knee_y-6), (0, knee_y), 32)
+    
+    # SIDE SEAM
+    st = _cbez(sw, (x_sh*0.7, hip_y*0.3), (x_sh, hip_y*0.7), (x_sh, hip_y), 24)
+    sm = _cbez((x_sh, hip_y), (x_sh, hip_y+3), (x_sk, knee_y-5), (x_sk, knee_y), 24)
+    
+    inseam_len = _polyline_length(ic) + abs(hem_y - knee_y)
+    side_len = _polyline_length(st) + _polyline_length(sm) + math.hypot(x_sk-x_se, knee_y-hem_y)
+    
+    outline = list(wc)
+    outline += st[1:]
+    outline += sm[1:]
+    outline += [(x_se, hem_y), (0, hem_y), (0, knee_y)]
+    outline += list(reversed(ic))[1:]
+    outline += list(reversed(cb_to_crotch))[1:]
+    outline += [wc[0]]
+    
+    x0, y0, x1, y1 = _bbox(outline)
+    grain_x = b_hem / 2.0
+    
+    # Back pocket welt
+    pocket_y = hip_y + 2.25
+    pocket_w = 5.5
+    pocket_x = b_hip * 0.5
+    welt = [(pocket_x - pocket_w/2, pocket_y), (pocket_x + pocket_w/2, pocket_y)]
+    
+    return {
+        "name": "back_panel",
+        "count": 2,
+        "mirror": True,
+        "cut": outline,
+        "grainline": [(grain_x, hip_y), (grain_x, hem_y - 2.0)],
+        "internal_lines": [welt],
+        "notches": [((x_sk, knee_y), "knee"), ((0, knee_y), "knee")],
+        "label_pos": ((x0+x1)/2, (y0+y1)/2),
+        "meta": {
+            "crotch_extension": b_cext,
+            "inseam_length": inseam_len,
+            "side_length": side_len,
+            "hem_width": b_hem,
+            "hip_width": b_hip,
+            "b_drop": b_drop,
+        },
+    }
+
+
+def _match_seams(m: dict, c: dict, e: dict) -> tuple:
+    """Build front, then adjust back b_drop until inseams match."""
+    front = _build_front_panel(m, c, e)
+    target_inseam = front["meta"]["inseam_length"]
+    
+    best_drop = 1.9
+    best_err = 999
+    for d10 in range(5, 45):
+        d = d10 * 0.1
+        back = _build_back_panel(m, c, e, b_drop=d)
+        err = abs(back["meta"]["inseam_length"] - target_inseam)
+        if err < best_err:
+            best_err = err
+            best_drop = d
+    
+    back = _build_back_panel(m, c, e, b_drop=best_drop)
+    return front, back
+
+
+def _rect_piece(name: str, width: float, height: float, *, count: int = 1, mirror: bool = False, fold: bool = False) -> dict:
+    cut = [(0, 0), (width, 0), (width, height), (0, height), (0, 0)]
+    return {
+        "name": name, "count": count, "mirror": mirror,
+        "cut": cut,
+        "grainline": [(width/2, 0.5), (width/2, max(0.5, height-0.5))],
+        "internal_lines": [], "notches": [],
+        "label_pos": (width/2, height/2),
+        "meta": {"cut_on_fold": fold},
+    }
+
+
+def solve(measurements: dict, construction: dict | None = None, ease: dict | None = None) -> dict:
+    """Main solver entry point."""
+    c = {**DEFAULT_CONSTRUCTION, **(construction or {})}
+    e = {**DEFAULT_EASE, **(ease or {})}
+    m = dict(measurements)
+    
+    required = ["waist", "hip", "front_rise", "inseam", "outseam", "thigh", "leg_opening", "fly_length"]
+    missing = [k for k in required if m.get(k) in (None, "")]
+    if missing:
+        raise ValueError(f"Missing measurements: {', '.join(missing)}")
+    
+    m["back_rise"] = float(m.get("back_rise") or (float(m["front_rise"]) + 2.0))
+    if m.get("knee") in (None, ""):
+        m["knee"] = (float(m["thigh"]) + float(m["leg_opening"])) / 2.0
+    
+    front, back = _match_seams(m, c, e)
+    
+    # Auxiliary pieces
+    wb_len = float(m["waist"]) + e["waist"] + c["seam_allowance"] * 2.0
+    wb_h = c["waistband_width"] * 2.0
+    waistband = _rect_piece("waistband", wb_len/2, wb_h, count=1, fold=True)
+    
+    fly_len = float(m["fly_length"])
+    fly_shield = {
+        "name": "fly_shield", "count": 1, "mirror": False,
+        "cut": [(0,0), (2.5,0)] + _qbez((2.5,0), (1.7,fly_len*0.65), (0.5,fly_len), 20) + [(0,fly_len), (0,0)],
+        "grainline": [(1.25, 0.5), (1.25, fly_len-0.5)],
+        "internal_lines": [], "notches": [],
+        "label_pos": (1.25, fly_len*0.45),
+        "meta": {},
+    }
+    fly_ext = _rect_piece("fly_extension", 1.5, fly_len)
+    pocket_bag = _rect_piece("front_pocket_bag", 6.0, 10.5, count=2, mirror=True)
+    back_welt = _rect_piece("back_pocket_welt", 5.5, 1.5, count=2, mirror=True)
+    back_bag = _rect_piece("back_pocket_bag", 6.0, 7.0, count=2, mirror=True)
+    belt_loop = _rect_piece("belt_loop_strip", 17.5, 1.5)
+    
+    pieces = [front, back, waistband, fly_shield, fly_ext, pocket_bag, back_welt, back_bag, belt_loop]
+    
+    for piece in pieces:
+        piece["seam_allowance"] = c["seam_allowance"]
+        piece["hem_allowance"] = c["hem_allowance"] if "panel" in piece["name"] else 0.0
+        try:
+            piece["seam_outline"] = _closed_offset(piece["cut"], c["seam_allowance"])
+        except Exception:
+            piece["seam_outline"] = []
+    
+    return {
+        "garment_type": "wide_leg_pants",
+        "unit": "inches",
+        "measurements": m,
+        "construction": c,
+        "ease": e,
+        "pieces": pieces,
+        "validation": {
+            "front_inseam": round(front["meta"]["inseam_length"], 3),
+            "back_inseam": round(back["meta"]["inseam_length"], 3),
+            "front_side": round(front["meta"]["side_length"], 3),
+            "back_side": round(back["meta"]["side_length"], 3),
+            "inseam_delta": round(abs(front["meta"]["inseam_length"] - back["meta"]["inseam_length"]), 3),
+            "side_delta": round(abs(front["meta"]["side_length"] - back["meta"]["side_length"]), 3),
+            "b_drop": back["meta"]["b_drop"],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# DXF export
+# ---------------------------------------------------------------------------
+
+def _add_layers(doc) -> None:
+    for name, color, lt in [
+        (LAYER_CUT, 7, "CONTINUOUS"), (LAYER_SA, 8, "DASHED"),
+        (LAYER_GRAIN, 3, "CENTER"), (LAYER_NOTCH, 1, "CONTINUOUS"),
+        (LAYER_INTERNAL, 6, "DOTTED"), (LAYER_TEXT, 2, "CONTINUOUS"),
+    ]:
+        if name not in doc.layers:
+            doc.layers.add(name=name, color=color, linetype=lt)
+
+
+def _draw_poly(msp, points, layer, closed=False):
+    pts = points[:-1] if closed and points and points[0] == points[-1] else points
+    msp.add_lwpolyline(pts, dxfattribs={"layer": layer, **({"closed": True} if closed else {})})
+
+
+def to_dxf(solution: dict, output_path: str) -> str:
+    doc = ezdxf.new("R2000")
+    doc.header["$INSUNITS"] = 1
+    _add_layers(doc)
+    msp = doc.modelspace()
+    
+    cx = 0.0; cy = 0.0; row_h = 0.0
+    
+    for piece in solution["pieces"]:
+        cut = piece["cut"]
+        x0, y0, x1, y1 = _bbox(cut)
+        w = x1-x0; h = y1-y0
+        
+        tc = [(x-x0+cx, y-y0+cy) for x, y in cut]
+        ts = [(x-x0+cx, y-y0+cy) for x, y in piece.get("seam_outline", [])]
+        
+        _draw_poly(msp, tc, LAYER_CUT, closed=True)
+        if ts:
+            _draw_poly(msp, ts, LAYER_SA, closed=True)
+        
+        for line in piece.get("internal_lines", []):
+            _draw_poly(msp, [(x-x0+cx, y-y0+cy) for x, y in line], LAYER_INTERNAL)
+        
+        grain = piece.get("grainline")
+        if grain:
+            _draw_poly(msp, [(x-x0+cx, y-y0+cy) for x, y in grain], LAYER_GRAIN)
+        
+        for (nx, ny), _ in piece.get("notches", []):
+            tx, ty = nx-x0+cx, ny-y0+cy
+            msp.add_line((tx-0.125, ty), (tx+0.125, ty), dxfattribs={"layer": LAYER_NOTCH})
+        
+        lx, ly = piece["label_pos"]
+        msp.add_text(
+            piece["name"].replace("_", " ").title(),
+            dxfattribs={"layer": LAYER_TEXT, "height": 0.25}
+        ).set_placement((lx-x0+cx, ly-y0+cy), align=_TEXT_ALIGN)
+        
+        cx += w + 3.0
+        row_h = max(row_h, h)
+        if cx > 70:
+            cx = 0; cy += row_h + 2.0; row_h = 0
+    
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    doc.saveas(str(out))
+    return str(out)
+
+
+if __name__ == "__main__":
+    sample = {
+        "waist": 30.0, "hip": 52.0,
+        "front_rise": 12.75, "back_rise": 14.75,
+        "inseam": 28.5, "outseam": 40.5,
+        "thigh": 28.0, "leg_opening": 23.5,
+        "fly_length": 10.0,
+    }
+    sol = solve(sample, DEFAULT_CONSTRUCTION, DEFAULT_EASE)
+    print(json.dumps(sol["validation"], indent=2))

@@ -27,12 +27,12 @@ RATIO_PROMPT = (
 
 
 try:
-    from .solvers import rect_panel_grid
+    from .solvers import rect_panel_grid, pant_block
 except Exception:  # direct script run fallback
     current_dir = Path(__file__).resolve().parent
     if str(current_dir) not in sys.path:
         sys.path.insert(0, str(current_dir))
-    from solvers import rect_panel_grid  # type: ignore
+    from solvers import rect_panel_grid, pant_block  # type: ignore
 
 
 def _read_json(path: Path) -> dict:
@@ -181,6 +181,44 @@ def _parse_tech_pack_from_intake(path: Path) -> Path | None:
             if value:
                 return Path(value).expanduser()
     return None
+
+
+def _load_size_chart(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def _pants_measurements_from_size_chart(path: Path, *, size: str | None = None) -> dict:
+    data = _load_size_chart(path)
+    sizes = data.get("sizes") or {}
+    ref_size = str(size or data.get("reference_size") or "30")
+    row = sizes.get(ref_size)
+    if not row:
+        raise ValueError(f"Size {ref_size} not found in {path}")
+
+    # Brand chart is flat for hip/leg opening. Waist is size-based circumference.
+    inseam = float(row.get("inseam_extra_short") or row.get("inseam_short") or row.get("inseam_standard"))
+    waist = float(row["waist"])
+    hip = float(row["hip"]) * 2.0
+    leg_opening = float(row["leg_opening"]) * 2.0
+    front_rise = float(row["front_rise"])
+
+    return {
+        "waist": waist,
+        "hip": hip,
+        "front_rise": front_rise,
+        "back_rise": front_rise + 2.0,
+        "inseam": inseam,
+        "outseam": front_rise + inseam - 0.75,
+        "thigh": 28.0 if waist == 30 else max(24.0, hip * 0.54),
+        "leg_opening": leg_opening,
+        "fly_length": 10.0,
+        "size": ref_size,
+    }
 
 
 def _normalize_ratios(ratios: dict) -> dict:
@@ -340,11 +378,34 @@ def main() -> int:
         print(f"Design directory not found: {design_dir}", file=sys.stderr)
         return 1
 
+    size_chart_path = design_dir / "size-chart.json"
+    pants_mode = size_chart_path.exists() and "pants" in json.dumps(_load_size_chart(size_chart_path)).lower()
+
     try:
-        measurements = _parse_measurements_from_intake(intake_path)
+        measurements = _pants_measurements_from_size_chart(size_chart_path) if pants_mode else _parse_measurements_from_intake(intake_path)
     except Exception as exc:
         print(f"Failed to read measurements: {exc}", file=sys.stderr)
         return 1
+
+    if pants_mode:
+        output_dir = design_dir / "patterns" / "mode_b"
+        output_path = output_dir / f"{design_slug}-pant-block.dxf"
+        if args.dry_run:
+            solution = pant_block.solve(measurements, pant_block.DEFAULT_CONSTRUCTION, pant_block.DEFAULT_EASE)
+            print(f"[dry-run] Pants mode for {design_slug}")
+            print(json.dumps(measurements, indent=2))
+            print(json.dumps(solution["validation"], indent=2))
+            print(f"[dry-run] Would write DXF: {output_path}")
+            return 0
+        solution = pant_block.solve(measurements, pant_block.DEFAULT_CONSTRUCTION, pant_block.DEFAULT_EASE)
+        written = pant_block.to_dxf(solution, str(output_path))
+        print(f"Design: {design_slug}")
+        print(f"Garment: wide_leg_pants")
+        print(f"Size: {measurements.get('size', 'reference')}")
+        print(f"Pieces: {len(solution['pieces'])}")
+        print(f"Validation: {json.dumps(solution['validation'])}")
+        print(f"DXF: {written}")
+        return 0
 
     ratios = None
     if args.ratios:

@@ -4,10 +4,24 @@ Two tools covering different stages of the generation pipeline.
 
 ## Tool Selection
 
-| Tool | Script | Use When | Cost |
-|------|--------|----------|------|
-| **FLUX.1 Kontext [pro]** | `kontext.py` | Editing existing images, colorway iteration, silhouette generation, multi-ref composition | $0.04/img |
-| **FLUX.1 dev (local)** | `flux_generate.py` | Free exploration, text-only generation, seeded iteration before committing to Kontext | Free |
+| Tool | Use When | Cost |
+|------|----------|------|
+| **Gemini 3 Pro Image** | Structural changes (panel layout, seam reshaping, silhouette changes), initial concept renders, multi-ref composition | API quota |
+| **FLUX.1 Kontext [pro]** | Texture/fabric changes, colorway iteration, detail edits on existing images | $0.04/img |
+| **FLUX.1 dev (local)** | Free text-only exploration, seeded iteration | Free |
+
+**Key rule:** Kontext cannot reliably reshape structural layout (panel positions, seam curves, garment proportions). Use Gemini for anything structural. Kontext for surface changes only.
+
+### Gemini 3 Pro Image — nano-banana-pro
+```bash
+# API key from Bitwarden item: "Gemini AI Studio" field: "API-KEY"
+GEMINI_API_KEY=$(bash ~/.openclaw/skills/bitwarden/scripts/bw_get_field.sh "Gemini AI Studio" "API-KEY") \
+uv run ~/.local/share/fnm/node-versions/v24.13.1/installation/lib/node_modules/openclaw/skills/nano-banana-pro/scripts/generate_image.py \
+  --prompt "..." \
+  --filename "output.png" \
+  -i "input.png" \
+  --resolution 2K
+```
 
 ## kontext.py — BFL API
 

@@ -161,10 +161,12 @@ def build_queue(state: dict, queue_mode: str = "all") -> list[str]:
     Return absolute paths that have Qwen results but no Gemini pass yet.
 
     queue_mode:
+      "A"   — Verify: Qwen=high AND visual_type in QUEUE_A_TYPES (on_model, product_photo, etc.)
       "B"   — Verify: Qwen=high AND visual_type in QUEUE_B_TYPES
       "C"   — Rescue: Qwen=low/medium AND visual_type in QUEUE_C_TYPES
-      "BC"  — Day 1: B + C combined
-      "all" — All entries without Gemini pass (original behaviour)
+      "BC"  — B + C combined
+      "ABC" — All three queues
+      "all" — All entries without Gemini pass
     """
     queue = []
     for path, data in state.get("processed", {}).items():
@@ -175,7 +177,10 @@ def build_queue(state: dict, queue_mode: str = "all") -> list[str]:
         rel = data.get("result", {}).get("relevance", "low")
         vt  = data.get("result", {}).get("visual_type", "unknown")
 
-        if queue_mode == "B":
+        if queue_mode == "A":
+            if rel in ("high", "critical") and vt in QUEUE_A_TYPES:
+                queue.append(path)
+        elif queue_mode == "B":
             if rel in ("high", "critical") and vt in QUEUE_B_TYPES:
                 queue.append(path)
         elif queue_mode == "C":
@@ -185,6 +190,12 @@ def build_queue(state: dict, queue_mode: str = "all") -> list[str]:
             is_b = rel in ("high", "critical") and vt in QUEUE_B_TYPES
             is_c = rel in ("low", "medium") and vt in QUEUE_C_TYPES
             if is_b or is_c:
+                queue.append(path)
+        elif queue_mode == "ABC":
+            is_a = rel in ("high", "critical") and vt in QUEUE_A_TYPES
+            is_b = rel in ("high", "critical") and vt in QUEUE_B_TYPES
+            is_c = rel in ("low", "medium") and vt in QUEUE_C_TYPES
+            if is_a or is_b or is_c:
                 queue.append(path)
         else:  # "all"
             queue.append(path)
@@ -199,7 +210,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit",   type=int, default=DAILY_LIMIT)
     parser.add_argument("--status",  action="store_true")
-    parser.add_argument("--queue", choices=["B","C","BC","all"], default="all",
+    parser.add_argument("--queue", choices=["A","B","C","BC","ABC","all"], default="all",
                         help="B=verify weak categories, C=rescue low/med, BC=Day1 (default: all)")
     args = parser.parse_args()
 
@@ -216,9 +227,9 @@ def main():
         print(f"Total entries  : {total}")
         print(f"Gemini done    : {done}")
         print(f"Pending        : {total - done}")
+        print(f"  Queue A      : {len(build_queue(state, 'A'))}  (Qwen high: on_model, product_photo, packaging)")
         print(f"  Queue B      : {len(build_queue(state, 'B'))}  (verify: high+weak categories)")
         print(f"  Queue C      : {len(build_queue(state, 'C'))}  (rescue: low/med miscat categories)")
-        print(f"  Queue A      : skipped by design  (trust Qwen on product/on_model/packaging)")
         print(f"Today's usage  : {daily_used(state)}/{DAILY_LIMIT}")
         return
 

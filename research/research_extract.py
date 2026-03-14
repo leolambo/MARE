@@ -14,8 +14,7 @@ Usage:
 Categories: character | story-beats | world-building | tone | power-dynamics |
             visual-grammar | silence-absence | all (default)
 
-Model: qwen2.5:14b via Ollama (local, zero cost)
-Fallback: qwen2.5vl:7b if 14b not available
+Model: Qwen3.5-35B-A3B via MLX (primary), qwen2.5:14b via Ollama (fallback)
 """
 import argparse
 import json
@@ -24,8 +23,44 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 from pathlib import Path
+import subprocess
+import time
+import atexit
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+MLX_URL = "http://127.0.0.1:8088/v1/chat/completions"
+MLX_MODEL = "/Users/al/.cache/mlx/Qwen3.5-35B-A3B-4bit"
+
+# ── MLX lifecycle ─────────────────────────────────────────────────────────────
+_MLX_STARTED_BY_US = False
+
+def ensure_mlx_running():
+    """Start MLX server if not running. Register atexit to stop it if we started it."""
+    global _MLX_STARTED_BY_US
+    if mlx_available():
+        return  # already up — not our server to stop
+    _MLX_STARTED_BY_US = True
+    subprocess.Popen(
+        ["bash", "-c",
+         "source ~/mlx-env/bin/activate && python -m mlx_lm.server "
+         "--model ~/.cache/mlx/Qwen3.5-35B-A3B-4bit "
+         "--port 8088 --host 127.0.0.1 "
+         "--chat-template-args \'{\"enable_thinking\":false}\'"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    print("⏳ Starting MLX server...", file=sys.stderr)
+    for _ in range(30):
+        if mlx_available():
+            print("✅ MLX server ready", file=sys.stderr)
+            return
+        time.sleep(1)
+    raise RuntimeError("MLX server failed to start after 30s")
+
+def _stop_mlx_if_we_started():
+    if _MLX_STARTED_BY_US:
+        subprocess.run(["pkill", "-f", "mlx_lm.server"], capture_output=True)
+
+atexit.register(_stop_mlx_if_we_started)
 
 CATEGORIES = [
     "character",
@@ -64,24 +99,32 @@ For each pattern you identify, structure your response EXACTLY as:
 
 Extract 3-6 findings. Be specific. Generic observations are useless. Look for patterns that appear across the text and would be genuinely useful for dark, confrontational brand storytelling."""
 
+def mlx_available() -> bool:
+    """Check if MLX server is running."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:8088/v1/models")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
 def get_available_model():
-    """Check what models are available in Ollama, prefer 14b."""
+    """Return ('mlx', None) if MLX is up, else ('ollama', model_id) fallback."""
+    if mlx_available():
+        return ("mlx", MLX_MODEL)
+    # Fallback to Ollama
     try:
         req = urllib.request.Request("http://127.0.0.1:11434/api/tags")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.load(resp)
         models = [m["name"] for m in data.get("models", [])]
         if any("qwen2.5:14b" in m for m in models):
-            return "qwen2.5:14b"
-        if any("qwen2.5vl:7b" in m for m in models):
-            print("⚠️  qwen2.5:14b not found, falling back to qwen2.5vl:7b", file=sys.stderr)
-            print("   Run: ollama pull qwen2.5:14b for better results", file=sys.stderr)
-            return "qwen2.5vl:7b"
-        print("❌ No suitable model found. Run: ollama pull qwen2.5:14b", file=sys.stderr)
+            print("⚠️  MLX not running, falling back to qwen2.5:14b", file=sys.stderr)
+            return ("ollama", "qwen2.5:14b")
+        print("❌ No model available. Start MLX or Ollama.", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"❌ Cannot reach Ollama: {e}", file=sys.stderr)
-        print("   Is Ollama running? Try: brew services start ollama", file=sys.stderr)
+        print(f"❌ Cannot reach any LLM backend: {e}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -105,7 +148,26 @@ TEXT TO ANALYZE:
 Extract 3-6 specific narrative craft findings from this text. Focus on techniques relevant to dark, confrontational brand storytelling. Be concrete — name the specific technique, give a specific example, explain why it works emotionally/structurally, then connect it to MARE."""
 
 
-def run_ollama(model: str, system: str, prompt: str) -> str:
+def run_llm(backend: str, model: str, system: str, prompt: str) -> str:
+    """Dispatch to MLX or Ollama based on backend."""
+    if backend == "mlx":
+        import urllib.request as ur
+        full_prompt = system + "\n\n" + prompt if system else prompt
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": full_prompt}],
+            "max_tokens": 2000,
+            "temperature": 0.3,
+        }
+        req = ur.Request(
+            MLX_URL,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"}
+        )
+        with ur.urlopen(req, timeout=300) as resp:
+            data = json.load(resp)
+            return data["choices"][0]["message"]["content"].strip()
+    # Ollama path
     payload = {
         "model": model,
         "prompt": prompt,
@@ -196,7 +258,8 @@ def main():
         categories = raw_cats
 
     # Get model
-    model = args.model or get_available_model()
+    ensure_mlx_running()
+    backend, model = get_available_model() if not args.model else ('ollama', args.model)
     print(f"🧠 Model: {model}")
     print(f"📖 Source: {args.source}")
     print(f"🏷  Category: {args.category}")
@@ -205,7 +268,7 @@ def main():
 
     # Build prompt and run
     prompt = build_prompt(args.source, text, categories)
-    findings = run_ollama(model, SYSTEM_PROMPT, prompt)
+    findings = run_llm(backend, model, SYSTEM_PROMPT, prompt)
 
     # Format and optionally append to file
     formatted = format_output(args.source, categories, findings)

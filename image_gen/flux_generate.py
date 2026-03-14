@@ -24,7 +24,7 @@ COMFY_URL = "http://127.0.0.1:8188"
 WORKFLOW = {
     "1": {
         "class_type": "UNETLoader",
-        "inputs": {"unet_name": "flux1-dev.safetensors", "weight_dtype": "fp8_e4m3fn"}
+        "inputs": {"unet_name": "flux1-dev.safetensors", "weight_dtype": "default"}
     },
     "2": {
         "class_type": "DualCLIPLoader",
