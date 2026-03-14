@@ -347,6 +347,226 @@ def solve(measurements: dict, construction: dict | None = None, ease: dict | Non
 
 
 # ---------------------------------------------------------------------------
+# DXF annotation helpers
+# ---------------------------------------------------------------------------
+
+def _vnorm(v: Point) -> Point:
+    """Normalize a 2D vector."""
+    length = math.hypot(v[0], v[1])
+    if length < 1e-9:
+        return (0.0, 0.0)
+    return (v[0] / length, v[1] / length)
+
+
+def _vperp(v: Point) -> Point:
+    """Perpendicular (90° CCW) of a 2D vector."""
+    return (-v[1], v[0])
+
+
+def _vmid(a: Point, b: Point) -> Point:
+    return ((a[0]+b[0])/2, (a[1]+b[1])/2)
+
+
+def _translate(pts: list, dx: float, dy: float) -> list:
+    return [(x+dx, y+dy) for x, y in pts]
+
+
+def _nearest_index(pts: list, target: Point) -> int:
+    """Find the index of the closest point in pts to target."""
+    best_i = 0
+    best_d = _dist(pts[0], target)
+    for i, p in enumerate(pts[1:], 1):
+        d = _dist(p, target)
+        if d < best_d:
+            best_d = d
+            best_i = i
+    return best_i
+
+
+def _seam_midpoint(pts: list, start_idx: int, end_idx: int) -> tuple:
+    """Find midpoint along a polyline segment and its tangent direction."""
+    if start_idx == end_idx:
+        return pts[start_idx], (1, 0)
+    # Collect points in order
+    n = len(pts)
+    indices = []
+    i = start_idx
+    while i != end_idx:
+        indices.append(i)
+        i = (i + 1) % n
+    indices.append(end_idx)
+    
+    # Total length
+    total = sum(_dist(pts[indices[j]], pts[indices[j+1]]) for j in range(len(indices)-1))
+    # Walk to midpoint
+    half = total / 2.0
+    accum = 0.0
+    for j in range(len(indices)-1):
+        seg = _dist(pts[indices[j]], pts[indices[j+1]])
+        if accum + seg >= half:
+            t = (half - accum) / seg if seg > 0 else 0
+            mx = pts[indices[j]][0] + t * (pts[indices[j+1]][0] - pts[indices[j]][0])
+            my = pts[indices[j]][1] + t * (pts[indices[j+1]][1] - pts[indices[j]][1])
+            dx = pts[indices[j+1]][0] - pts[indices[j]][0]
+            dy = pts[indices[j+1]][1] - pts[indices[j]][1]
+            return (mx, my), _vnorm((dx, dy))
+        accum += seg
+    return pts[indices[-1]], (1, 0)
+
+
+def _add_notch_mark(msp, point: Point, tangent: Point, count: int = 1):
+    """Draw notch mark(s) perpendicular to the seam at the given point.
+    count=1 for single notch (front), count=2 for double (back)."""
+    perp = _vperp(_vnorm(tangent))
+    notch_len = 0.25
+    if count == 1:
+        a = (point[0] - perp[0]*notch_len/2, point[1] - perp[1]*notch_len/2)
+        b = (point[0] + perp[0]*notch_len/2, point[1] + perp[1]*notch_len/2)
+        msp.add_line(a, b, dxfattribs={"layer": LAYER_NOTCH})
+    else:
+        for offset in [-0.15, 0.15]:
+            px = point[0] + tangent[0]*offset
+            py = point[1] + tangent[1]*offset
+            a = (px - perp[0]*notch_len/2, py - perp[1]*notch_len/2)
+            b = (px + perp[0]*notch_len/2, py + perp[1]*notch_len/2)
+            msp.add_line(a, b, dxfattribs={"layer": LAYER_NOTCH})
+
+
+def _add_grain_arrowhead(msp, tip: Point, direction: Point):
+    """Draw a small triangle arrowhead at the tip of the grainline."""
+    d = _vnorm(direction)
+    p = _vperp(d)
+    size = 0.15
+    p1 = (tip[0] + d[0]*size*2, tip[1] + d[1]*size*2)
+    p2 = (tip[0] + p[0]*size, tip[1] + p[1]*size)
+    p3 = (tip[0] - p[0]*size, tip[1] - p[1]*size)
+    msp.add_lwpolyline([tip, p2, p1, p3, tip], dxfattribs={"layer": LAYER_GRAIN, "closed": True})
+
+
+def _add_seam_number(msp, point: Point, tangent: Point, number: int, offset_dist: float = 0.5):
+    """Place a circled seam number outside the cut line."""
+    perp = _vperp(_vnorm(tangent))
+    # Offset outward from the cut line
+    tx = point[0] + perp[0] * offset_dist
+    ty = point[1] + perp[1] * offset_dist
+    # Number text
+    msp.add_text(
+        str(number),
+        dxfattribs={"layer": LAYER_TEXT, "height": 0.2}
+    ).set_placement((tx, ty), align=_TEXT_ALIGN)
+    # Circle around the number
+    msp.add_circle((tx, ty), 0.2, dxfattribs={"layer": LAYER_TEXT})
+
+
+def _annotate_main_panel(msp, piece: dict, translated_cut: list, dx: float, dy: float,
+                          measurements: dict, is_front: bool = True):
+    """Add industry-standard annotations to a main panel (front or back)."""
+    tc = translated_cut
+    # Remove closing point for indexing
+    pts = tc[:-1] if tc and _dist(tc[0], tc[-1]) < 0.01 else tc
+    n = len(pts)
+    
+    # --- SEAM EDGE IDENTIFICATION ---
+    # The outline order (from build functions):
+    # waist_curve → side_top → side_mid → side_hem → hem_across → inseam_up → 
+    # inseam_curve(rev) → crotch_curve(rev) → [cb_seam(rev)] → close
+    #
+    # We identify seams by y-position of key points:
+    hem_y_val = max(p[1] for p in pts)
+    waist_y_val = min(p[1] for p in pts)
+    
+    # Find hem corners (two points at max y)
+    hem_pts = [(i, p) for i, p in enumerate(pts) if abs(p[1] - hem_y_val) < 0.5]
+    if len(hem_pts) >= 2:
+        hem_pts.sort(key=lambda x: x[1][0])
+        inseam_hem_idx = hem_pts[0][0]
+        side_hem_idx = hem_pts[-1][0]
+    else:
+        inseam_hem_idx = side_hem_idx = 0
+    
+    # Find waist corners (near min y, leftmost and rightmost)
+    waist_pts = [(i, p) for i, p in enumerate(pts) if abs(p[1] - waist_y_val) < 2.0]
+    if len(waist_pts) >= 2:
+        waist_pts.sort(key=lambda x: x[1][0])
+        cf_waist_idx = waist_pts[0][0]
+        side_waist_idx = waist_pts[-1][0]
+    else:
+        cf_waist_idx = side_waist_idx = 0
+    
+    # Find crotch point (leftmost x)
+    crotch_idx = min(range(n), key=lambda i: pts[i][0])
+    
+    # --- SEAM NUMBERS ---
+    # 1 = inseam (hem to crotch on left side)
+    mid, tan = _seam_midpoint(pts, inseam_hem_idx, crotch_idx)
+    _add_seam_number(msp, mid, tan, 1, offset_dist=-0.7)
+    
+    # 2 = side seam (waist to hem on right side)
+    mid, tan = _seam_midpoint(pts, side_waist_idx, side_hem_idx)
+    _add_seam_number(msp, mid, tan, 2, offset_dist=0.7)
+    
+    # 3 = center/crotch seam (waist to crotch on left side)
+    mid, tan = _seam_midpoint(pts, cf_waist_idx, crotch_idx)
+    _add_seam_number(msp, mid, tan, 3, offset_dist=-0.7)
+    
+    # 4 = waist (top edge)
+    mid, tan = _seam_midpoint(pts, cf_waist_idx, side_waist_idx)
+    _add_seam_number(msp, mid, tan, 4, offset_dist=-0.5)
+    
+    # --- NOTCH MARKS ---
+    # Hip-level notch on side seam
+    hip_y_translated = 8.5 + dy
+    # Find closest point on side seam (right side, between waist and hem)
+    side_region = []
+    i = side_waist_idx
+    while i != side_hem_idx:
+        side_region.append(i)
+        i = (i + 1) % n
+    side_region.append(side_hem_idx)
+    
+    best_hip_idx = min(side_region, key=lambda i: abs(pts[i][1] - hip_y_translated))
+    hip_tan = _vnorm((
+        pts[(best_hip_idx+1) % n][0] - pts[(best_hip_idx-1) % n][0],
+        pts[(best_hip_idx+1) % n][1] - pts[(best_hip_idx-1) % n][1],
+    ))
+    notch_count = 1 if is_front else 2
+    _add_notch_mark(msp, pts[best_hip_idx], hip_tan, count=notch_count)
+    
+    # CF/CB waist notch
+    cf_pt = pts[cf_waist_idx]
+    if cf_waist_idx + 1 < n:
+        cf_tan = _vnorm((pts[cf_waist_idx+1][0] - cf_pt[0], pts[cf_waist_idx+1][1] - cf_pt[1]))
+    else:
+        cf_tan = (0, 1)
+    _add_notch_mark(msp, cf_pt, cf_tan, count=1)
+    
+    # --- PATTERN INFO TEXT ---
+    lx, ly = piece["label_pos"]
+    lx += dx; ly += dy
+    name_text = "FRONT PANEL" if is_front else "BACK PANEL"
+    count = piece.get("count", 1)
+    mirror = piece.get("mirror", False)
+    cut_text = f"Cut {count} (mirror)" if mirror else f"Cut {count}"
+    size_text = f"Size: {measurements.get('waist', '?')}\" waist"
+    
+    spacing = 0.35
+    for i, text in enumerate([name_text, cut_text, size_text]):
+        msp.add_text(
+            text,
+            dxfattribs={"layer": LAYER_TEXT, "height": 0.2}
+        ).set_placement((lx, ly + i * spacing), align=_TEXT_ALIGN)
+    
+    # --- SA LABEL ---
+    sa = piece.get("seam_allowance", 0.625)
+    sa_text = f'SA {sa}"'
+    # Place near top-right corner
+    msp.add_text(
+        sa_text,
+        dxfattribs={"layer": LAYER_SA, "height": 0.15}
+    ).set_placement((lx + 3.0, ly - 1.0), align=_TEXT_ALIGN)
+
+
+# ---------------------------------------------------------------------------
 # DXF export
 # ---------------------------------------------------------------------------
 
@@ -377,30 +597,54 @@ def to_dxf(solution: dict, output_path: str) -> str:
         cut = piece["cut"]
         x0, y0, x1, y1 = _bbox(cut)
         w = x1-x0; h = y1-y0
+        dx, dy = -x0 + cx, -y0 + cy
         
-        tc = [(x-x0+cx, y-y0+cy) for x, y in cut]
-        ts = [(x-x0+cx, y-y0+cy) for x, y in piece.get("seam_outline", [])]
+        tc = [(x+dx, y+dy) for x, y in cut]
+        ts = [(x+dx, y+dy) for x, y in piece.get("seam_outline", [])]
         
         _draw_poly(msp, tc, LAYER_CUT, closed=True)
         if ts:
             _draw_poly(msp, ts, LAYER_SA, closed=True)
         
         for line in piece.get("internal_lines", []):
-            _draw_poly(msp, [(x-x0+cx, y-y0+cy) for x, y in line], LAYER_INTERNAL)
+            _draw_poly(msp, [(x+dx, y+dy) for x, y in line], LAYER_INTERNAL)
         
+        # Grainline with arrowheads
         grain = piece.get("grainline")
         if grain:
-            _draw_poly(msp, [(x-x0+cx, y-y0+cy) for x, y in grain], LAYER_GRAIN)
+            tg = _translate(grain, dx, dy)
+            _draw_poly(msp, tg, LAYER_GRAIN)
+            if len(tg) >= 2:
+                # Arrowhead at start (pointing up)
+                d_start = (tg[0][0]-tg[1][0], tg[0][1]-tg[1][1])
+                _add_grain_arrowhead(msp, tg[0], d_start)
+                # Arrowhead at end (pointing down)
+                d_end = (tg[-1][0]-tg[-2][0], tg[-1][1]-tg[-2][1])
+                _add_grain_arrowhead(msp, tg[-1], d_end)
         
-        for (nx, ny), _ in piece.get("notches", []):
-            tx, ty = nx-x0+cx, ny-y0+cy
-            msp.add_line((tx-0.125, ty), (tx+0.125, ty), dxfattribs={"layer": LAYER_NOTCH})
+        # Notch marks with proper perpendicular orientation
+        closed_pts = tc[:-1] if tc and _dist(tc[0], tc[-1]) < 0.01 else tc
+        for (nx, ny), label in piece.get("notches", []):
+            p = (nx+dx, ny+dy)
+            idx = _nearest_index(closed_pts, p)
+            n_pts = len(closed_pts)
+            tan = _vnorm((
+                closed_pts[(idx+1) % n_pts][0] - closed_pts[(idx-1) % n_pts][0],
+                closed_pts[(idx+1) % n_pts][1] - closed_pts[(idx-1) % n_pts][1],
+            ))
+            _add_notch_mark(msp, p, tan, count=1)
         
-        lx, ly = piece["label_pos"]
-        msp.add_text(
-            piece["name"].replace("_", " ").title(),
-            dxfattribs={"layer": LAYER_TEXT, "height": 0.25}
-        ).set_placement((lx-x0+cx, ly-y0+cy), align=_TEXT_ALIGN)
+        # Annotations for main panels
+        if piece["name"] in ("front_panel", "back_panel"):
+            is_front = piece["name"] == "front_panel"
+            _annotate_main_panel(msp, piece, tc, dx, dy,
+                                  solution.get("measurements", {}), is_front=is_front)
+        else:
+            lx, ly = piece["label_pos"]
+            msp.add_text(
+                piece["name"].replace("_", " ").title(),
+                dxfattribs={"layer": LAYER_TEXT, "height": 0.25}
+            ).set_placement((lx+dx, ly+dy), align=_TEXT_ALIGN)
         
         cx += w + 3.0
         row_h = max(row_h, h)
