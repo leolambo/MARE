@@ -196,6 +196,20 @@ def _get_fracs(lengths):
     return fracs
 
 
+# CLO3D Auto 3D Arrangement name mapping
+# These must match CLO3D's internal arrangement point dictionary exactly.
+# Wrong names → pieces placed incorrectly (e.g. waistband at neck).
+CLO3D_ARRANGEMENT_NAMES = {
+    "Front_Panel":  {"PointName": "Leg_Front_L", "fOffSetX": 0.05, "fOffSetY": 0.05, "fAngle": 0.0},
+    "Back_Panel":   {"PointName": "Leg_Back_L",  "fOffSetX": 0.05, "fOffSetY": 0.05, "fAngle": 0.0},
+    "Front_Left":   {"PointName": "Leg_Front_L", "fOffSetX": 0.05, "fOffSetY": 0.05, "fAngle": 0.0},
+    "Front_Right":  {"PointName": "Leg_Front_R", "fOffSetX": 0.05, "fOffSetY": 0.05, "fAngle": 0.0},
+    "Back_Left":    {"PointName": "Leg_Back_L",  "fOffSetX": 0.05, "fOffSetY": 0.05, "fAngle": 0.0},
+    "Back_Right":   {"PointName": "Leg_Back_R",  "fOffSetX": 0.05, "fOffSetY": 0.05, "fAngle": 0.0},
+    "Waistband":    {"PointName": "Pants_Waistband", "fOffSetX": 0.0, "fOffSetY": 0.0, "fAngle": 0.0},
+}
+
+
 def _build_pattern(name, lines, fabric_uuid, offset_x=0):
     """Build a complete CLO3D pattern entry."""
     pattern_id = _uid()
@@ -205,6 +219,9 @@ def _build_pattern(name, lines, fabric_uuid, offset_x=0):
         for line in lines:
             for pt in line["PointList"]:
                 pt["Position"]["x"] += offset_x
+
+    # Set correct arrangement point name for Auto 3D Arrangement
+    arr = CLO3D_ARRANGEMENT_NAMES.get(name, {"PointName": "Arrangement Point", "fOffSetX": 0.0, "fOffSetY": 0.0, "fAngle": 0.0})
 
     return {
         "Name": name,
@@ -224,12 +241,7 @@ def _build_pattern(name, lines, fabric_uuid, offset_x=0):
             "IsSlashed": False,
             "LineList": lines,
         },
-        "ArrangementPointDataMap": {
-            "PointName": "Arrangement Point",
-            "fOffSetX": 0.0,
-            "fOffSetY": 0.0,
-            "fAngle": 0.0,
-        },
+        "ArrangementPointDataMap": arr,
     }, pattern_id
 
 
