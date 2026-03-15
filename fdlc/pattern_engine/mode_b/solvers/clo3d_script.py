@@ -295,24 +295,39 @@ def main():
     print("")
     print("--- AUTO-SEWING ---")
 
-    sew_pairs = [
-        # (name, front_lines, back_lines, dir_a, dir_b)
-        ("side_top", f_map["side_top"], b_map["side_top"], True, True),
-        ("side_bot", f_map["side_bot"], b_map["side_bot"], True, True),
-        ("side_hem", f_map["side_hem"], b_map["side_hem"], True, True),
-        ("inseam_straight", f_map["inseam_straight"], b_map["inseam_straight"], True, True),
-        ("inseam_curve", f_map["inseam_curve"], b_map["inseam_curve"], True, True),
-        ("crotch", f_map["crotch"], b_map["crotch"], True, True),
-        ("waist", f_map["waist"], b_map["waist"], True, True),
+    # Verified line mapping from diagnostics:
+    # Lines 0-7 match 1:1 between front and back
+    # Line 0: waist, 1: side_top, 2: side_bot, 3: side_hem
+    # Line 4: hem (skip), 5: inseam_straight, 6: inseam_curve, 7: crotch
+    # Front 8-12: CF seam (5 straight segments)
+    # Back 8: CB seam (1 bezier)
+
+    simple_pairs = [
+        ("side_top",        1, 1, True, True),
+        ("side_hip_knee",   2, 2, True, True),
+        ("side_knee_hem",   3, 3, True, True),
+        ("inseam_straight", 5, 5, True, True),
+        ("inseam_curve",    6, 6, True, True),
+        ("crotch",          7, 7, True, True),
     ]
 
-    for name, f_line, b_line, da, db in sew_pairs:
+    for name, fl, bl, da, db in simple_pairs:
         try:
-            ok = pattern_api.AddSeamlinePairGroup(fi, f_line, bi, 0, b_line, da, db)
+            ok = pattern_api.AddSeamlinePairGroup(fi, fl, bi, 0, bl, da, db)
             status = "OK" if ok else "FAIL"
         except Exception as e:
             status = "ERR: " + str(e)
-        print("  " + name + " (F:" + str(f_line) + " B:" + str(b_line) + "): " + status)
+        print("  " + name + " (F:" + str(fl) + " B:" + str(bl) + "): " + status)
+
+    # Center seam: front CF segments (8-12) ↔ back CB (8)
+    # Try sewing each CF segment to the CB line
+    for cf_line in range(8, 13):
+        try:
+            ok = pattern_api.AddSeamlinePairGroup(fi, cf_line, bi, 0, 8, True, True)
+            status = "OK" if ok else "FAIL"
+        except Exception as e:
+            status = "ERR: " + str(e)
+        print("  cf_seg_" + str(cf_line) + " -> cb (F:" + str(cf_line) + " B:8): " + status)
 
     print("")
     print("Done! Check 2D window for sewing lines.")
