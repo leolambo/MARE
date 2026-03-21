@@ -367,19 +367,192 @@ def generate_clo3d_json(measurements: dict, output_path: str, b_drop: float = 1.
     return str(out)
 
 
+def _mirror_lines(lines):
+    """Mirror panel geometry by negating X coordinates for opposite leg."""
+    mirrored = json.loads(json.dumps(lines))  # deep copy
+    for line in mirrored:
+        for pt in line["PointList"]:
+            pt["Position"]["x"] = -pt["Position"]["x"]
+            pt["ID"] = _uid()
+    return mirrored
+
+
+def _build_per_leg_seams(front_id, back_id, f_fracs, b_fracs, f_line_count, b_line_count):
+    """Build per-leg seams (side, inseam, waist) — excludes center/crotch which go cross-leg."""
+    pairs = [
+        ("side_top", 1, 1),
+        ("side_hip_knee", 2, 2),
+        ("side_knee_hem", 3, 3),
+        ("inseam_straight", 5, 5),
+        ("inseam_curve", 6, 6),
+        ("waist", 0, 0),
+    ]
+
+    seams = []
+    for name, fi, bi in pairs:
+        seam = {
+            "Name": name,
+            "bIsTurned": False,
+            "PairList": [{
+                "First": {
+                    "ShapeID": back_id,
+                    "LengthParam": {"fStart": b_fracs[bi+1], "fEnd": b_fracs[bi]},
+                    "Direction": False,
+                },
+                "Second": {
+                    "ShapeID": front_id,
+                    "LengthParam": {"fStart": f_fracs[fi+1], "fEnd": f_fracs[fi]},
+                    "Direction": False,
+                },
+            }],
+            "FoldData": {"iAngle": 180, "iStrength": 5},
+        }
+        seams.append(seam)
+    return seams
+
+
+def _build_cross_leg_seams(fl_id, fr_id, bl_id, br_id, f_fracs, b_fracs, f_line_count):
+    """Build cross-leg seams: center front (FL↔FR), center back (BL↔BR), crotch."""
+    seams = []
+
+    # Center front: FL CF ↔ FR CF (lines 8 to end on front panel)
+    cf_frac = {"fStart": f_fracs[f_line_count], "fEnd": f_fracs[8]}
+    seams.append({
+        "Name": "center_front",
+        "bIsTurned": False,
+        "PairList": [{"First": {"ShapeID": fl_id, "LengthParam": dict(cf_frac), "Direction": False},
+                       "Second": {"ShapeID": fr_id, "LengthParam": dict(cf_frac), "Direction": False}}],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
+
+    # Center back: BL CB ↔ BR CB (line 8 on back panel)
+    cb_frac = {"fStart": b_fracs[9], "fEnd": b_fracs[8]}
+    seams.append({
+        "Name": "center_back",
+        "bIsTurned": False,
+        "PairList": [{"First": {"ShapeID": bl_id, "LengthParam": dict(cb_frac), "Direction": False},
+                       "Second": {"ShapeID": br_id, "LengthParam": dict(cb_frac), "Direction": False}}],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
+
+    # Crotch front: FL crotch ↔ FR crotch (line 7 on front)
+    cf_crotch = {"fStart": f_fracs[8], "fEnd": f_fracs[7]}
+    seams.append({
+        "Name": "crotch_front",
+        "bIsTurned": False,
+        "PairList": [{"First": {"ShapeID": fl_id, "LengthParam": dict(cf_crotch), "Direction": False},
+                       "Second": {"ShapeID": fr_id, "LengthParam": dict(cf_crotch), "Direction": False}}],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
+
+    # Crotch back: BL crotch ↔ BR crotch (line 7 on back)
+    cb_crotch = {"fStart": b_fracs[8], "fEnd": b_fracs[7]}
+    seams.append({
+        "Name": "crotch_back",
+        "bIsTurned": False,
+        "PairList": [{"First": {"ShapeID": bl_id, "LengthParam": dict(cb_crotch), "Direction": False},
+                       "Second": {"ShapeID": br_id, "LengthParam": dict(cb_crotch), "Direction": False}}],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
+
+    return seams
+
+
+def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1.9) -> str:
+    """
+    Generate 5-panel CLO3D JSON: Front_Left, Front_Right, Back_Left, Back_Right, Waistband.
+
+    Right panels have mirrored geometry. Seams include per-leg (side, inseam, waist)
+    and cross-leg (center front FL↔FR, center back BL↔BR, crotch).
+
+    Args:
+        measurements: dict with waist, hip, front_rise, inseam, outseam, leg_opening
+        output_path: where to write the JSON file
+        b_drop: back crotch drop
+    Returns:
+        output file path
+    """
+    m = measurements
+    fabric_uuid = _uid()
+
+    # Left leg (original geometry), Right leg (mirrored)
+    fl_lines = _build_front_lines(m)
+    bl_lines = _build_back_lines(m, b_drop=b_drop)
+    fr_lines = _mirror_lines(_build_front_lines(m))
+    br_lines = _mirror_lines(_build_back_lines(m, b_drop=b_drop))
+
+    fl_pat, fl_id = _build_pattern("Front_Left", fl_lines, fabric_uuid, offset_x=0)
+    fr_pat, fr_id = _build_pattern("Front_Right", fr_lines, fabric_uuid, offset_x=400)
+    bl_pat, bl_id = _build_pattern("Back_Left", bl_lines, fabric_uuid, offset_x=800)
+    br_pat, br_id = _build_pattern("Back_Right", br_lines, fabric_uuid, offset_x=1200)
+
+    # Waistband
+    wb_w = (m["waist"] + 1.0) * 25.4
+    wb_h = 1.5 * 2 * 25.4
+    def _pt(x, y):
+        return {"ID": _uid(), "PointType": "Straight", "Position": {"x": x, "y": y}, "GradingRuleID": 0}
+    wb_lines = [
+        {"PointList": [_pt(0, 0), _pt(wb_w, 0)]},
+        {"PointList": [_pt(wb_w, 0), _pt(wb_w, wb_h)]},
+        {"PointList": [_pt(wb_w, wb_h), _pt(0, wb_h)]},
+        {"PointList": [_pt(0, wb_h), _pt(0, 0)]},
+    ]
+    wb_pat, wb_id = _build_pattern("Waistband", wb_lines, fabric_uuid, offset_x=1600)
+
+    # Compute fracs from clean (unmutated) lines
+    f_clean = _build_front_lines(m)
+    b_clean = _build_back_lines(m, b_drop=b_drop)
+    f_lengths = _compute_line_lengths_mm(f_clean)
+    b_lengths = _compute_line_lengths_mm(b_clean)
+    f_fracs = _get_fracs(f_lengths)
+    b_fracs = _get_fracs(b_lengths)
+
+    # Per-leg seams (side, inseam, waist)
+    left_seams = _build_per_leg_seams(fl_id, bl_id, f_fracs, b_fracs, len(f_clean), len(b_clean))
+    right_seams = _build_per_leg_seams(fr_id, br_id, f_fracs, b_fracs, len(f_clean), len(b_clean))
+    for s in left_seams:
+        s["Name"] += "_L"
+    for s in right_seams:
+        s["Name"] += "_R"
+
+    # Cross-leg seams (center front/back, crotch)
+    cross_seams = _build_cross_leg_seams(fl_id, fr_id, bl_id, br_id, f_fracs, b_fracs, len(f_clean))
+
+    all_seams = left_seams + right_seams + cross_seams
+    patterns = [fl_pat, fr_pat, bl_pat, br_pat, wb_pat]
+    pat_ids = [fl_id, fr_id, bl_id, br_id, wb_id]
+
+    clo_data = {
+        "FabricList": [{"FabricName": "FABRIC 1", "FabricType": "None", "FabricContent": "None",
+                         "strBaseColorHexCode": "#FFFFFF", "FabricUUID": fabric_uuid}],
+        "GradingRuleTableList": [],
+        "Unit": "mm",
+        "PatternList": patterns,
+        "SymmetricDataList": [{"SymmetricPatternID": "None", "OriginPatternID": pid} for pid in pat_ids],
+        "InstanceDataList": [{"OriginPatternID": pid, "InstancePatternIDArray": []} for pid in pat_ids],
+        "SeamLinePairGroupList": all_seams,
+    }
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, 'w') as f:
+        json.dump(clo_data, f, indent=2)
+
+    return str(out)
+
+
 if __name__ == "__main__":
     m = {
         "waist": 30.0,
-        "hip": 52.0,
+        "hip": 42.0,
         "front_rise": 12.75,
         "inseam": 28.5,
         "outseam": 40.5,
         "leg_opening": 23.5,
     }
-    path = generate_clo3d_json(m, "/tmp/clo_auto.json")
+    path = generate_5panel_json(m, "/tmp/clo_5panel_auto.json")
     print("Generated: " + path)
 
-    # Stats
     with open(path) as f:
         data = json.load(f)
     print("Patterns: " + str(len(data["PatternList"])))
