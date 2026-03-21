@@ -81,7 +81,7 @@ def _ensure_shared_points(lines):
 
 def _build_front_lines(m):
     """Build front panel as list of CLO3D lines."""
-    hip_y = 8.5
+    hip_y = 9.5
     CY = m["front_rise"]
     hem_y = m["outseam"]
     knee_y = hem_y - m["inseam"] * 0.52
@@ -100,8 +100,8 @@ def _build_front_lines(m):
     lines = []
     # 0: waist curve
     lines.append(_cbez_line(cfw, (fw*0.3, -0.8), (fw*0.65, -0.7), sw))
-    # 1: side waist-to-hip
-    lines.append(_cbez_line(sw, (xsh*0.7, hip_y*0.3), (xsh, hip_y*0.7), (xsh, hip_y)))
+    # 1: side waist-to-hip (smoothed — more gradual transition)
+    lines.append(_cbez_line(sw, (xsh*0.5, hip_y*0.35), (xsh*0.85, hip_y*0.65), (xsh, hip_y)))
     # 2: side hip-to-knee
     lines.append(_cbez_line((xsh, hip_y), (xsh, hip_y+3), (xsk, knee_y-5), (xsk, knee_y)))
     # 3: side knee-to-hem
@@ -128,7 +128,7 @@ def _build_front_lines(m):
 
 def _build_back_lines(m, b_drop=1.9):
     """Build back panel as list of CLO3D lines."""
-    hip_y = 8.5
+    hip_y = 9.5
     CY = m["front_rise"]
     hem_y = m["outseam"]
     knee_y = hem_y - m["inseam"] * 0.52
@@ -147,8 +147,8 @@ def _build_back_lines(m, b_drop=1.9):
     lines = []
     # 0: waist curve
     lines.append(_cbez_line(cfw, (cfw[0]+bw*0.3, -1.2), (cfw[0]+bw*0.7, -0.6), sw))
-    # 1: side waist-to-hip
-    lines.append(_cbez_line(sw, (xsh*0.7, hip_y*0.3), (xsh, hip_y*0.7), (xsh, hip_y)))
+    # 1: side waist-to-hip (smoothed — more gradual transition)
+    lines.append(_cbez_line(sw, (xsh*0.5, hip_y*0.35), (xsh*0.85, hip_y*0.65), (xsh, hip_y)))
     # 2: side hip-to-knee
     lines.append(_cbez_line((xsh, hip_y), (xsh, hip_y+3), (xsk, knee_y-5), (xsk, knee_y)))
     # 3: side knee-to-hem
