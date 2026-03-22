@@ -543,49 +543,45 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
 
     # Waistband-to-leg seams
     # Waistband-to-leg seams.
-    # Validated against Leo's manual CLO3D corrections (2026-03-22).
+    # Validated against Leo's corrected CLO3D export (2026-03-22 short inseam).
     #
     # WB piece lines: 0=bottom-left, 1=bottom-right, 2=right-side, 3=top, 4=left-side
     # Leg panel line 0 = waist edge.
     #
-    # Left-side WB seams (FL, BL): WB uses Direction=True (reversed traversal),
-    # fracs go fStart=line_start → fEnd=line_end. Leg side is normal (fStart→fEnd descending).
+    # Front WB: bottom-RIGHT (line 1) → FL, bottom-LEFT (line 0) → FR
+    # Back WB:  bottom-LEFT (line 0) → BL, bottom-RIGHT (line 1) → BR
     #
-    # Right-side WB seams (FR, BR): WB uses Direction=False, normal frac order.
-    # Leg fracs are NOT swapped for mirrored panels — same direction as left side.
-    # BR seam has First/Second swapped (leg is First, WB is Second).
-    #
-    # Reference: designs/wide-leg-twill-pants/analysis/clo3d-working-wb-seams.json
+    # Reference: designs/wide-leg-twill-pants/analysis/clo3d-working-wb-seams-short.json
     wb_seams = []
 
-    # wb_front_to_FL: WB bottom-left (line 0), Dir=True ↔ FL waist (line 0)
+    # wb_front_to_FL: FL is First, WB bottom-RIGHT (line 1). Both Dir=True.
     wb_seams.append({
         "Name": "wb_front_to_FL",
         "bIsTurned": False,
         "PairList": [{
             "First": {
-                "ShapeID": fwb_id,
-                "LengthParam": {"fStart": fwb_fracs[0], "fEnd": fwb_fracs[1]},
+                "ShapeID": fl_id,
+                "LengthParam": {"fStart": f_fracs[0], "fEnd": f_fracs[1]},
                 "Direction": True,
             },
             "Second": {
-                "ShapeID": fl_id,
-                "LengthParam": {"fStart": f_fracs[1], "fEnd": f_fracs[0]},
-                "Direction": False,
+                "ShapeID": fwb_id,
+                "LengthParam": {"fStart": fwb_fracs[1], "fEnd": fwb_fracs[2]},
+                "Direction": True,
             },
         }],
         "FoldData": {"iAngle": 180, "iStrength": 5},
     })
 
-    # wb_front_to_FR: WB bottom-right (line 1), Dir=False ↔ FR waist (line 0)
+    # wb_front_to_FR: WB is First, WB bottom-LEFT (line 0). WB Dir=True, FR Dir=False.
     wb_seams.append({
         "Name": "wb_front_to_FR",
         "bIsTurned": False,
         "PairList": [{
             "First": {
                 "ShapeID": fwb_id,
-                "LengthParam": {"fStart": fwb_fracs[2], "fEnd": fwb_fracs[1]},
-                "Direction": False,
+                "LengthParam": {"fStart": fwb_fracs[0], "fEnd": fwb_fracs[1]},
+                "Direction": True,
             },
             "Second": {
                 "ShapeID": fr_id,
@@ -596,7 +592,7 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
         "FoldData": {"iAngle": 180, "iStrength": 5},
     })
 
-    # wb_back_to_BL: WB bottom-left (line 0), Dir=True ↔ BL waist (line 0)
+    # wb_back_to_BL: WB is First, WB bottom-LEFT (line 0). WB Dir=True, BL Dir=False.
     wb_seams.append({
         "Name": "wb_back_to_BL",
         "bIsTurned": False,
@@ -615,7 +611,7 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
         "FoldData": {"iAngle": 180, "iStrength": 5},
     })
 
-    # wb_back_to_BR: First=BR leg, Second=WB (swapped vs others)
+    # wb_back_to_BR: BR is First, WB bottom-RIGHT (line 1). Both Dir=False.
     wb_seams.append({
         "Name": "wb_back_to_BR",
         "bIsTurned": False,
@@ -635,40 +631,41 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
     })
 
     # WB-to-WB side seams connecting front and back waistband pieces.
-    # WB lines: 2=right-side, 4=left-side
-    # Right side seam: BWB right-side (line 2) ↔ FWB right-side (line 2), both Dir=False
+    # Right side: FWB right-side (line 2) ↔ BWB left-side (line 4)
+    # FWB Dir=False, BWB Dir=True
     wb_seams.append({
         "Name": "wb_side_R",
         "bIsTurned": False,
         "PairList": [{
             "First": {
-                "ShapeID": bwb_id,
-                "LengthParam": {"fStart": bwb_fracs[3], "fEnd": bwb_fracs[2]},
-                "Direction": False,
-            },
-            "Second": {
                 "ShapeID": fwb_id,
                 "LengthParam": {"fStart": fwb_fracs[3], "fEnd": fwb_fracs[2]},
                 "Direction": False,
+            },
+            "Second": {
+                "ShapeID": bwb_id,
+                "LengthParam": {"fStart": bwb_fracs[4], "fEnd": bwb_fracs[5]},
+                "Direction": True,
             },
         }],
         "FoldData": {"iAngle": 180, "iStrength": 5},
     })
 
-    # Left side seam: BWB left-side (line 4) ↔ FWB left-side (line 4), both Dir=True
+    # Left side: FWB left-side (line 4) ↔ BWB right-side (line 2)
+    # FWB Dir=True, BWB Dir=False
     wb_seams.append({
         "Name": "wb_side_L",
         "bIsTurned": False,
         "PairList": [{
             "First": {
-                "ShapeID": bwb_id,
-                "LengthParam": {"fStart": bwb_fracs[4], "fEnd": bwb_fracs[5]},
-                "Direction": True,
-            },
-            "Second": {
                 "ShapeID": fwb_id,
                 "LengthParam": {"fStart": fwb_fracs[4], "fEnd": fwb_fracs[5]},
                 "Direction": True,
+            },
+            "Second": {
+                "ShapeID": bwb_id,
+                "LengthParam": {"fStart": bwb_fracs[3], "fEnd": bwb_fracs[2]},
+                "Direction": False,
             },
         }],
         "FoldData": {"iAngle": 180, "iStrength": 5},
