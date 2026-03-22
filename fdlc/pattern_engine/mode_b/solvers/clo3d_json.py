@@ -542,80 +542,137 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
     cross_seams = _build_cross_leg_seams(fl_id, fr_id, bl_id, br_id, f_fracs, b_fracs, len(f_clean))
 
     # Waistband-to-leg seams
-    # Front WB: bottom-left (line 0) → FL waist, bottom-right (line 1) → FR waist
-    # Back WB: bottom-left (line 0) → BL waist, bottom-right (line 1) → BR waist
-    # Right panels (FR, BR) are mirrored — their waist edge runs opposite direction,
-    # so we swap fStart/fEnd on the leg side for right-side seams.
+    # Waistband-to-leg seams.
+    # Validated against Leo's manual CLO3D corrections (2026-03-22).
+    #
+    # WB piece lines: 0=bottom-left, 1=bottom-right, 2=right-side, 3=top, 4=left-side
+    # Leg panel line 0 = waist edge.
+    #
+    # Left-side WB seams (FL, BL): WB uses Direction=True (reversed traversal),
+    # fracs go fStart=line_start → fEnd=line_end. Leg side is normal (fStart→fEnd descending).
+    #
+    # Right-side WB seams (FR, BR): WB uses Direction=False, normal frac order.
+    # Leg fracs are NOT swapped for mirrored panels — same direction as left side.
+    # BR seam has First/Second swapped (leg is First, WB is Second).
+    #
+    # Reference: designs/wide-leg-twill-pants/analysis/clo3d-working-wb-seams.json
     wb_seams = []
-    wb_leg_map = [
-        # (name, wb_id, wb_fracs, wb_line, leg_id, leg_fracs, is_right)
-        ("wb_front_to_FL", fwb_id, fwb_fracs, 0, fl_id, f_fracs, False),
-        ("wb_front_to_FR", fwb_id, fwb_fracs, 1, fr_id, f_fracs, True),
-        ("wb_back_to_BL", bwb_id, bwb_fracs, 0, bl_id, b_fracs, False),
-        ("wb_back_to_BR", bwb_id, bwb_fracs, 1, br_id, b_fracs, True),
-    ]
-    for name, wb_id, wb_f, wb_line, leg_id, leg_f, is_right in wb_leg_map:
-        # For right-side (mirrored) panels, swap leg frac direction
-        if is_right:
-            leg_start, leg_end = leg_f[0], leg_f[1]
-        else:
-            leg_start, leg_end = leg_f[1], leg_f[0]
-        wb_seams.append({
-            "Name": name,
-            "bIsTurned": False,
-            "PairList": [{
-                "First": {
-                    "ShapeID": wb_id,
-                    "LengthParam": {"fStart": wb_f[wb_line+1], "fEnd": wb_f[wb_line]},
-                    "Direction": False,
-                },
-                "Second": {
-                    "ShapeID": leg_id,
-                    "LengthParam": {"fStart": leg_start, "fEnd": leg_end},
-                    "Direction": False,
-                },
-            }],
-            "FoldData": {"iAngle": 180, "iStrength": 5},
-        })
 
-    # WB-to-WB: front WB ↔ back WB at side seams
-    # Front WB right side (line 2) ↔ Back WB left side (line 4) = right side seam
-    # Front WB left side (line 4) ↔ Back WB right side (line 2) = left side seam
-    # Wait — layout around waist: Front_WB in front, Back_WB in back
-    # Left side: Front_WB left edge ↔ Back_WB left edge? No...
-    # Think of it unfolded: ...BackWB_left | FrontWB | BackWB_right...
-    # Actually: FrontWB.right ↔ BackWB.left (one side), FrontWB.left ↔ BackWB.right (other side)
-    # But that's wrong too. Let me think about the physical layout:
-    # Around the waist: Front_WB (center front) → side → Back_WB (center back) → side → Front_WB
-    # So: FrontWB.right_side connects to BackWB.left_side (right side of body)
-    #     FrontWB.left_side connects to BackWB.right_side (left side of body)
-    # But our WB piece lines: 0=bottom-L, 1=bottom-R, 2=right, 3=top, 4=left
-    # FrontWB line 4 (left side) ↔ BackWB line 4 (left side) — NO, that's both lefts
-    # Actually: if both pieces are laid out the same way (left=CF side, right=side seam)
-    # then FrontWB.right(line2) ↔ BackWB.left(line4) and FrontWB.left(line4) ↔ BackWB.right(line2)
-    # Hmm, this depends on orientation. Let's just connect the short edges:
-    wb_connect = [
-        ("wb_side_R", fwb_id, fwb_fracs, 2, bwb_id, bwb_fracs, 4),  # Front right ↔ Back left
-        ("wb_side_L", fwb_id, fwb_fracs, 4, bwb_id, bwb_fracs, 2),  # Front left ↔ Back right
-    ]
-    for name, id1, f1, line1, id2, f2, line2 in wb_connect:
-        wb_seams.append({
-            "Name": name,
-            "bIsTurned": False,
-            "PairList": [{
-                "First": {
-                    "ShapeID": id1,
-                    "LengthParam": {"fStart": f1[line1+1], "fEnd": f1[line1]},
-                    "Direction": False,
-                },
-                "Second": {
-                    "ShapeID": id2,
-                    "LengthParam": {"fStart": f2[line2+1], "fEnd": f2[line2]},
-                    "Direction": False,
-                },
-            }],
-            "FoldData": {"iAngle": 180, "iStrength": 5},
-        })
+    # wb_front_to_FL: WB bottom-left (line 0), Dir=True ↔ FL waist (line 0)
+    wb_seams.append({
+        "Name": "wb_front_to_FL",
+        "bIsTurned": False,
+        "PairList": [{
+            "First": {
+                "ShapeID": fwb_id,
+                "LengthParam": {"fStart": fwb_fracs[0], "fEnd": fwb_fracs[1]},
+                "Direction": True,
+            },
+            "Second": {
+                "ShapeID": fl_id,
+                "LengthParam": {"fStart": f_fracs[1], "fEnd": f_fracs[0]},
+                "Direction": False,
+            },
+        }],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
+
+    # wb_front_to_FR: WB bottom-right (line 1), Dir=False ↔ FR waist (line 0)
+    wb_seams.append({
+        "Name": "wb_front_to_FR",
+        "bIsTurned": False,
+        "PairList": [{
+            "First": {
+                "ShapeID": fwb_id,
+                "LengthParam": {"fStart": fwb_fracs[2], "fEnd": fwb_fracs[1]},
+                "Direction": False,
+            },
+            "Second": {
+                "ShapeID": fr_id,
+                "LengthParam": {"fStart": f_fracs[1], "fEnd": f_fracs[0]},
+                "Direction": False,
+            },
+        }],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
+
+    # wb_back_to_BL: WB bottom-left (line 0), Dir=True ↔ BL waist (line 0)
+    wb_seams.append({
+        "Name": "wb_back_to_BL",
+        "bIsTurned": False,
+        "PairList": [{
+            "First": {
+                "ShapeID": bwb_id,
+                "LengthParam": {"fStart": bwb_fracs[0], "fEnd": bwb_fracs[1]},
+                "Direction": True,
+            },
+            "Second": {
+                "ShapeID": bl_id,
+                "LengthParam": {"fStart": b_fracs[1], "fEnd": b_fracs[0]},
+                "Direction": False,
+            },
+        }],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
+
+    # wb_back_to_BR: First=BR leg, Second=WB (swapped vs others)
+    wb_seams.append({
+        "Name": "wb_back_to_BR",
+        "bIsTurned": False,
+        "PairList": [{
+            "First": {
+                "ShapeID": br_id,
+                "LengthParam": {"fStart": b_fracs[1], "fEnd": b_fracs[0]},
+                "Direction": False,
+            },
+            "Second": {
+                "ShapeID": bwb_id,
+                "LengthParam": {"fStart": bwb_fracs[2], "fEnd": bwb_fracs[1]},
+                "Direction": False,
+            },
+        }],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
+
+    # WB-to-WB side seams connecting front and back waistband pieces.
+    # WB lines: 2=right-side, 4=left-side
+    # Right side seam: BWB right-side (line 2) ↔ FWB right-side (line 2), both Dir=False
+    wb_seams.append({
+        "Name": "wb_side_R",
+        "bIsTurned": False,
+        "PairList": [{
+            "First": {
+                "ShapeID": bwb_id,
+                "LengthParam": {"fStart": bwb_fracs[3], "fEnd": bwb_fracs[2]},
+                "Direction": False,
+            },
+            "Second": {
+                "ShapeID": fwb_id,
+                "LengthParam": {"fStart": fwb_fracs[3], "fEnd": fwb_fracs[2]},
+                "Direction": False,
+            },
+        }],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
+
+    # Left side seam: BWB left-side (line 4) ↔ FWB left-side (line 4), both Dir=True
+    wb_seams.append({
+        "Name": "wb_side_L",
+        "bIsTurned": False,
+        "PairList": [{
+            "First": {
+                "ShapeID": bwb_id,
+                "LengthParam": {"fStart": bwb_fracs[4], "fEnd": bwb_fracs[5]},
+                "Direction": True,
+            },
+            "Second": {
+                "ShapeID": fwb_id,
+                "LengthParam": {"fStart": fwb_fracs[4], "fEnd": fwb_fracs[5]},
+                "Direction": True,
+            },
+        }],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    })
 
     all_seams = left_seams + right_seams + cross_seams + wb_seams
     patterns = [fl_pat, fr_pat, bl_pat, br_pat, fwb_pat, bwb_pat]
