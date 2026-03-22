@@ -88,7 +88,7 @@ def _build_front_lines(m):
     wh = m["waist"] / 2.0
     hh = m["hip"] / 2.0
     fw = wh * 0.48 + 1.0
-    fhip = hh * 0.48 + 1.5
+    fhip = hh * 0.48 + 0.5
     fhem = m["leg_opening"] * 0.48
     fcx = hh * 0.125
     xsh = fhip
@@ -100,8 +100,10 @@ def _build_front_lines(m):
     lines = []
     # 0: waist curve
     lines.append(_cbez_line(cfw, (fw*0.3, -0.8), (fw*0.65, -0.7), sw))
-    # 1: side waist-to-hip (smoothed — more gradual transition)
-    lines.append(_cbez_line(sw, (xsh*0.5, hip_y*0.35), (xsh*0.85, hip_y*0.65), (xsh, hip_y)))
+    # 1: side waist-to-hip (near-straight diagonal to avoid bunching)
+    mid_x = sw[0] + (xsh - sw[0]) * 0.5
+    mid_y = sw[1] + (hip_y - sw[1]) * 0.5
+    lines.append(_cbez_line(sw, (mid_x - 0.3, mid_y - 1.0), (mid_x + 0.3, mid_y + 1.0), (xsh, hip_y)))
     # 2: side hip-to-knee
     lines.append(_cbez_line((xsh, hip_y), (xsh, hip_y+3), (xsk, knee_y-5), (xsk, knee_y)))
     # 3: side knee-to-hem
@@ -135,7 +137,7 @@ def _build_back_lines(m, b_drop=1.9):
     wh = m["waist"] / 2.0
     hh = m["hip"] / 2.0
     bw = wh * 0.52 - 1.0
-    bhip = hh * 0.52 + 1.5 - 2.4
+    bhip = hh * 0.52 + 1.5 - 3.4
     bhem = m["leg_opening"] * 0.52
     bcx = hh * 0.125 + 1.5
     xsh = bhip
@@ -147,8 +149,10 @@ def _build_back_lines(m, b_drop=1.9):
     lines = []
     # 0: waist curve
     lines.append(_cbez_line(cfw, (cfw[0]+bw*0.3, -1.2), (cfw[0]+bw*0.7, -0.6), sw))
-    # 1: side waist-to-hip (smoothed — more gradual transition)
-    lines.append(_cbez_line(sw, (xsh*0.5, hip_y*0.35), (xsh*0.85, hip_y*0.65), (xsh, hip_y)))
+    # 1: side waist-to-hip (near-straight diagonal to avoid bunching)
+    mid_x = sw[0] + (xsh - sw[0]) * 0.5
+    mid_y = sw[1] + (hip_y - sw[1]) * 0.5
+    lines.append(_cbez_line(sw, (mid_x - 0.3, mid_y - 1.0), (mid_x + 0.3, mid_y + 1.0), (xsh, hip_y)))
     # 2: side hip-to-knee
     lines.append(_cbez_line((xsh, hip_y), (xsh, hip_y+3), (xsk, knee_y-5), (xsk, knee_y)))
     # 3: side knee-to-hem
