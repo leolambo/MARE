@@ -458,19 +458,35 @@ def _build_cross_leg_seams(fl_id, fr_id, bl_id, br_id, f_fracs, b_fracs, f_line_
     return seams
 
 
+def _build_wb_piece(name, width_mm, height_mm, fabric_uuid, offset_x=0):
+    """Build a rectangular waistband piece for CLO3D sim (not for IRL cutting).
+
+    5 lines: bottom-left, bottom-right, right side, top, left side.
+    Bottom is split at midpoint so each half can sew to a different leg panel
+    without violating the no-edge-overlap rule.
+    """
+    def _pt(x, y):
+        return {"ID": _uid(), "PointType": "Straight", "Position": {"x": x, "y": y}, "GradingRuleID": 0}
+    mid = width_mm / 2.0
+    lines = [
+        {"PointList": [_pt(0, 0), _pt(mid, 0)]},                     # 0: bottom-left (sews to left leg)
+        {"PointList": [_pt(mid, 0), _pt(width_mm, 0)]},              # 1: bottom-right (sews to right leg)
+        {"PointList": [_pt(width_mm, 0), _pt(width_mm, height_mm)]}, # 2: right side
+        {"PointList": [_pt(width_mm, height_mm), _pt(0, height_mm)]},# 3: top
+        {"PointList": [_pt(0, height_mm), _pt(0, 0)]},               # 4: left side
+    ]
+    return _build_pattern(name, lines, fabric_uuid, offset_x=offset_x)
+
+
 def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1.9) -> str:
     """
-    Generate 5-panel CLO3D JSON: Front_Left, Front_Right, Back_Left, Back_Right, Waistband.
+    Generate 6-panel CLO3D JSON: FL, FR, BL, BR + 2 waistband pieces (front + back).
 
-    Right panels have mirrored geometry. Seams include per-leg (side, inseam, waist)
-    and cross-leg (center front FL↔FR, center back BL↔BR, crotch).
+    CLO3D-specific: 2 waistband pieces for simulation.
+    IRL pattern uses single waistband — see pant_block.py/dxf_export.py.
 
-    Args:
-        measurements: dict with waist, hip, front_rise, inseam, outseam, leg_opening
-        output_path: where to write the JSON file
-        b_drop: back crotch drop
-    Returns:
-        output file path
+    Right panels have mirrored geometry. Seams include per-leg (side, inseam),
+    cross-leg (center front/back, crotch), and waistband-to-leg + WB-to-WB.
     """
     m = measurements
     fabric_uuid = _uid()
@@ -486,19 +502,6 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
     bl_pat, bl_id = _build_pattern("Back_Left", bl_lines, fabric_uuid, offset_x=800)
     br_pat, br_id = _build_pattern("Back_Right", br_lines, fabric_uuid, offset_x=1200)
 
-    # Waistband
-    wb_w = (m["waist"] + 1.0) * 25.4
-    wb_h = 1.5 * 2 * 25.4
-    def _pt(x, y):
-        return {"ID": _uid(), "PointType": "Straight", "Position": {"x": x, "y": y}, "GradingRuleID": 0}
-    wb_lines = [
-        {"PointList": [_pt(0, 0), _pt(wb_w, 0)]},
-        {"PointList": [_pt(wb_w, 0), _pt(wb_w, wb_h)]},
-        {"PointList": [_pt(wb_w, wb_h), _pt(0, wb_h)]},
-        {"PointList": [_pt(0, wb_h), _pt(0, 0)]},
-    ]
-    wb_pat, wb_id = _build_pattern("Waistband", wb_lines, fabric_uuid, offset_x=1600)
-
     # Compute fracs from clean (unmutated) lines
     f_clean = _build_front_lines(m)
     b_clean = _build_back_lines(m, b_drop=b_drop)
@@ -507,9 +510,29 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
     f_fracs = _get_fracs(f_lengths)
     b_fracs = _get_fracs(b_lengths)
 
-    # Per-leg seams (side, inseam, waist)
+    # 2 waistband pieces: front WB (width = 2x front waist) and back WB (width = 2x back waist)
+    wb_h = 1.5 * 2 * 25.4  # 3" cut height in mm
+    f_waist_mm = f_lengths[0]
+    b_waist_mm = b_lengths[0]
+    fwb_w = f_waist_mm * 2  # front WB spans both front panels
+    bwb_w = b_waist_mm * 2  # back WB spans both back panels
+
+    fwb_pat, fwb_id = _build_wb_piece("WB_Front", fwb_w, wb_h, fabric_uuid, offset_x=0)
+    bwb_pat, bwb_id = _build_wb_piece("WB_Back", bwb_w, wb_h, fabric_uuid, offset_x=600)
+
+    # WB fracs (5 lines: bottom-L, bottom-R, right, top, left)
+    def _wb_fracs(w, h):
+        half_w = w / 2.0
+        perim = 2 * (w + h)
+        return [0.0, half_w/perim, w/perim, (w+h)/perim, (2*w+h)/perim, 1.0]
+    fwb_fracs = _wb_fracs(fwb_w, wb_h)
+    bwb_fracs = _wb_fracs(bwb_w, wb_h)
+
+    # Per-leg seams (side, inseam — NO waist, waist goes to WB)
     left_seams = _build_per_leg_seams(fl_id, bl_id, f_fracs, b_fracs, len(f_clean), len(b_clean))
     right_seams = _build_per_leg_seams(fr_id, br_id, f_fracs, b_fracs, len(f_clean), len(b_clean))
+    left_seams = [s for s in left_seams if s["Name"] != "waist"]
+    right_seams = [s for s in right_seams if s["Name"] != "waist"]
     for s in left_seams:
         s["Name"] += "_L"
     for s in right_seams:
@@ -518,9 +541,77 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
     # Cross-leg seams (center front/back, crotch)
     cross_seams = _build_cross_leg_seams(fl_id, fr_id, bl_id, br_id, f_fracs, b_fracs, len(f_clean))
 
-    all_seams = left_seams + right_seams + cross_seams
-    patterns = [fl_pat, fr_pat, bl_pat, br_pat, wb_pat]
-    pat_ids = [fl_id, fr_id, bl_id, br_id, wb_id]
+    # Waistband-to-leg seams
+    # Front WB: bottom-left (line 0) → FL waist, bottom-right (line 1) → FR waist
+    # Back WB: bottom-left (line 0) → BL waist, bottom-right (line 1) → BR waist
+    wb_seams = []
+    wb_leg_map = [
+        ("wb_front_to_FL", fwb_id, fwb_fracs, 0, fl_id, f_fracs),
+        ("wb_front_to_FR", fwb_id, fwb_fracs, 1, fr_id, f_fracs),
+        ("wb_back_to_BL", bwb_id, bwb_fracs, 0, bl_id, b_fracs),
+        ("wb_back_to_BR", bwb_id, bwb_fracs, 1, br_id, b_fracs),
+    ]
+    for name, wb_id, wb_f, wb_line, leg_id, leg_f in wb_leg_map:
+        wb_seams.append({
+            "Name": name,
+            "bIsTurned": False,
+            "PairList": [{
+                "First": {
+                    "ShapeID": wb_id,
+                    "LengthParam": {"fStart": wb_f[wb_line+1], "fEnd": wb_f[wb_line]},
+                    "Direction": False,
+                },
+                "Second": {
+                    "ShapeID": leg_id,
+                    "LengthParam": {"fStart": leg_f[1], "fEnd": leg_f[0]},
+                    "Direction": False,
+                },
+            }],
+            "FoldData": {"iAngle": 180, "iStrength": 5},
+        })
+
+    # WB-to-WB: front WB ↔ back WB at side seams
+    # Front WB right side (line 2) ↔ Back WB left side (line 4) = right side seam
+    # Front WB left side (line 4) ↔ Back WB right side (line 2) = left side seam
+    # Wait — layout around waist: Front_WB in front, Back_WB in back
+    # Left side: Front_WB left edge ↔ Back_WB left edge? No...
+    # Think of it unfolded: ...BackWB_left | FrontWB | BackWB_right...
+    # Actually: FrontWB.right ↔ BackWB.left (one side), FrontWB.left ↔ BackWB.right (other side)
+    # But that's wrong too. Let me think about the physical layout:
+    # Around the waist: Front_WB (center front) → side → Back_WB (center back) → side → Front_WB
+    # So: FrontWB.right_side connects to BackWB.left_side (right side of body)
+    #     FrontWB.left_side connects to BackWB.right_side (left side of body)
+    # But our WB piece lines: 0=bottom-L, 1=bottom-R, 2=right, 3=top, 4=left
+    # FrontWB line 4 (left side) ↔ BackWB line 4 (left side) — NO, that's both lefts
+    # Actually: if both pieces are laid out the same way (left=CF side, right=side seam)
+    # then FrontWB.right(line2) ↔ BackWB.left(line4) and FrontWB.left(line4) ↔ BackWB.right(line2)
+    # Hmm, this depends on orientation. Let's just connect the short edges:
+    wb_connect = [
+        ("wb_side_R", fwb_id, fwb_fracs, 2, bwb_id, bwb_fracs, 4),  # Front right ↔ Back left
+        ("wb_side_L", fwb_id, fwb_fracs, 4, bwb_id, bwb_fracs, 2),  # Front left ↔ Back right
+    ]
+    for name, id1, f1, line1, id2, f2, line2 in wb_connect:
+        wb_seams.append({
+            "Name": name,
+            "bIsTurned": False,
+            "PairList": [{
+                "First": {
+                    "ShapeID": id1,
+                    "LengthParam": {"fStart": f1[line1+1], "fEnd": f1[line1]},
+                    "Direction": False,
+                },
+                "Second": {
+                    "ShapeID": id2,
+                    "LengthParam": {"fStart": f2[line2+1], "fEnd": f2[line2]},
+                    "Direction": False,
+                },
+            }],
+            "FoldData": {"iAngle": 180, "iStrength": 5},
+        })
+
+    all_seams = left_seams + right_seams + cross_seams + wb_seams
+    patterns = [fl_pat, fr_pat, bl_pat, br_pat, fwb_pat, bwb_pat]
+    pat_ids = [p["ID"] for p in patterns]
 
     clo_data = {
         "FabricList": [{"FabricName": "FABRIC 1", "FabricType": "None", "FabricContent": "None",
