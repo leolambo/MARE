@@ -100,10 +100,8 @@ def _build_front_lines(m):
     lines = []
     # 0: waist curve
     lines.append(_cbez_line(cfw, (fw*0.3, -0.8), (fw*0.65, -0.7), sw))
-    # 1: side waist-to-hip (near-straight diagonal to avoid bunching)
-    mid_x = sw[0] + (xsh - sw[0]) * 0.5
-    mid_y = sw[1] + (hip_y - sw[1]) * 0.5
-    lines.append(_cbez_line(sw, (mid_x - 0.3, mid_y - 1.0), (mid_x + 0.3, mid_y + 1.0), (xsh, hip_y)))
+    # 1: side waist-to-hip
+    lines.append(_cbez_line(sw, (xsh*0.7, hip_y*0.3), (xsh, hip_y*0.7), (xsh, hip_y)))
     # 2: side hip-to-knee
     lines.append(_cbez_line((xsh, hip_y), (xsh, hip_y+3), (xsk, knee_y-5), (xsk, knee_y)))
     # 3: side knee-to-hem
@@ -149,10 +147,8 @@ def _build_back_lines(m, b_drop=1.9):
     lines = []
     # 0: waist curve
     lines.append(_cbez_line(cfw, (cfw[0]+bw*0.3, -1.2), (cfw[0]+bw*0.7, -0.6), sw))
-    # 1: side waist-to-hip (near-straight diagonal to avoid bunching)
-    mid_x = sw[0] + (xsh - sw[0]) * 0.5
-    mid_y = sw[1] + (hip_y - sw[1]) * 0.5
-    lines.append(_cbez_line(sw, (mid_x - 0.3, mid_y - 1.0), (mid_x + 0.3, mid_y + 1.0), (xsh, hip_y)))
+    # 1: side waist-to-hip
+    lines.append(_cbez_line(sw, (xsh*0.7, hip_y*0.3), (xsh, hip_y*0.7), (xsh, hip_y)))
     # 2: side hip-to-knee
     lines.append(_cbez_line((xsh, hip_y), (xsh, hip_y+3), (xsk, knee_y-5), (xsk, knee_y)))
     # 3: side knee-to-hem
