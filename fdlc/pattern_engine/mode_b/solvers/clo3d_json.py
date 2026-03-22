@@ -544,14 +544,22 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
     # Waistband-to-leg seams
     # Front WB: bottom-left (line 0) → FL waist, bottom-right (line 1) → FR waist
     # Back WB: bottom-left (line 0) → BL waist, bottom-right (line 1) → BR waist
+    # Right panels (FR, BR) are mirrored — their waist edge runs opposite direction,
+    # so we swap fStart/fEnd on the leg side for right-side seams.
     wb_seams = []
     wb_leg_map = [
-        ("wb_front_to_FL", fwb_id, fwb_fracs, 0, fl_id, f_fracs),
-        ("wb_front_to_FR", fwb_id, fwb_fracs, 1, fr_id, f_fracs),
-        ("wb_back_to_BL", bwb_id, bwb_fracs, 0, bl_id, b_fracs),
-        ("wb_back_to_BR", bwb_id, bwb_fracs, 1, br_id, b_fracs),
+        # (name, wb_id, wb_fracs, wb_line, leg_id, leg_fracs, is_right)
+        ("wb_front_to_FL", fwb_id, fwb_fracs, 0, fl_id, f_fracs, False),
+        ("wb_front_to_FR", fwb_id, fwb_fracs, 1, fr_id, f_fracs, True),
+        ("wb_back_to_BL", bwb_id, bwb_fracs, 0, bl_id, b_fracs, False),
+        ("wb_back_to_BR", bwb_id, bwb_fracs, 1, br_id, b_fracs, True),
     ]
-    for name, wb_id, wb_f, wb_line, leg_id, leg_f in wb_leg_map:
+    for name, wb_id, wb_f, wb_line, leg_id, leg_f, is_right in wb_leg_map:
+        # For right-side (mirrored) panels, swap leg frac direction
+        if is_right:
+            leg_start, leg_end = leg_f[0], leg_f[1]
+        else:
+            leg_start, leg_end = leg_f[1], leg_f[0]
         wb_seams.append({
             "Name": name,
             "bIsTurned": False,
@@ -563,7 +571,7 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
                 },
                 "Second": {
                     "ShapeID": leg_id,
-                    "LengthParam": {"fStart": leg_f[1], "fEnd": leg_f[0]},
+                    "LengthParam": {"fStart": leg_start, "fEnd": leg_end},
                     "Direction": False,
                 },
             }],
