@@ -81,14 +81,14 @@ def _ensure_shared_points(lines):
 
 def _build_front_lines(m):
     """Build front panel as list of CLO3D lines."""
-    hip_y = 9.5
+    hip_y = 8.5
     CY = m["front_rise"]
     hem_y = m["outseam"]
     knee_y = hem_y - m["inseam"] * 0.52
     wh = m["waist"] / 2.0
     hh = m["hip"] / 2.0
     fw = wh * 0.48 + 1.0
-    fhip = hh * 0.48 + 0.5
+    fhip = hh * 0.48 + 1.5
     fhem = m["leg_opening"] * 0.48
     fcx = hh * 0.125
     xsh = fhip
@@ -128,14 +128,14 @@ def _build_front_lines(m):
 
 def _build_back_lines(m, b_drop=1.9):
     """Build back panel as list of CLO3D lines."""
-    hip_y = 9.5
+    hip_y = 8.5
     CY = m["front_rise"]
     hem_y = m["outseam"]
     knee_y = hem_y - m["inseam"] * 0.52
     wh = m["waist"] / 2.0
     hh = m["hip"] / 2.0
     bw = wh * 0.52 - 1.0
-    bhip = hh * 0.52 + 1.5 - 3.4
+    bhip = hh * 0.52 + 1.5 - 2.4
     bhem = m["leg_opening"] * 0.52
     bcx = hh * 0.125 + 1.5
     xsh = bhip
