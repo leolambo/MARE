@@ -511,7 +511,7 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
     b_fracs = _get_fracs(b_lengths)
 
     # 2 waistband pieces: front WB (width = 2x front waist) and back WB (width = 2x back waist)
-    wb_h = 1.5 * 2 * 25.4  # 3" cut height in mm
+    wb_h = 2.0 * 25.4  # 2" waistband height in mm
     f_waist_mm = f_lengths[0]
     b_waist_mm = b_lengths[0]
     fwb_w = f_waist_mm * 2  # front WB spans both front panels
