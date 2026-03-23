@@ -102,8 +102,10 @@ def _build_front_lines(m):
     lines.append(_cbez_line(cfw, (fw*0.3, -0.8), (fw*0.65, -0.7), sw))
     # 1: side waist-to-hip
     lines.append(_cbez_line(sw, (xsh*0.7, hip_y*0.3), (xsh, hip_y*0.7), (xsh, hip_y)))
-    # 2: side hip-to-knee
-    lines.append(_cbez_line((xsh, hip_y), (xsh, hip_y+3), (xsk, knee_y-5), (xsk, knee_y)))
+    # 2: side hip-to-knee (smooth taper, no outward bulge)
+    mid_x = xsh + (xsk - xsh) * 0.3
+    mid_y = hip_y + (knee_y - hip_y) * 0.3
+    lines.append(_cbez_line((xsh, hip_y), (mid_x, mid_y), (xsk, knee_y-5), (xsk, knee_y)))
     # 3: side knee-to-hem
     lines.append(_straight_line((xsk, knee_y), (fhem, hem_y)))
     # 4: hem across
@@ -149,8 +151,10 @@ def _build_back_lines(m, b_drop=1.9):
     lines.append(_cbez_line(cfw, (cfw[0]+bw*0.3, -1.2), (cfw[0]+bw*0.7, -0.6), sw))
     # 1: side waist-to-hip
     lines.append(_cbez_line(sw, (xsh*0.7, hip_y*0.3), (xsh, hip_y*0.7), (xsh, hip_y)))
-    # 2: side hip-to-knee
-    lines.append(_cbez_line((xsh, hip_y), (xsh, hip_y+3), (xsk, knee_y-5), (xsk, knee_y)))
+    # 2: side hip-to-knee (smooth taper, no outward bulge)
+    mid_x = xsh + (xsk - xsh) * 0.3
+    mid_y = hip_y + (knee_y - hip_y) * 0.3
+    lines.append(_cbez_line((xsh, hip_y), (mid_x, mid_y), (xsk, knee_y-5), (xsk, knee_y)))
     # 3: side knee-to-hem
     lines.append(_straight_line((xsk, knee_y), (bhem, hem_y)))
     # 4: hem across
