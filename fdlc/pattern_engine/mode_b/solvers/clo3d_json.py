@@ -697,10 +697,10 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
 if __name__ == "__main__":
     m = {
         "waist": 30.0,
-        "hip": 42.0,
-        "front_rise": 12.75,
-        "inseam": 28.5,
-        "outseam": 40.5,
+        "hip": 42.0,          # 21" flat × 2 (bag measurement)
+        "front_rise": 10.75,  # waist seam to crotch (excludes 2" waistband)
+        "inseam": 30.0,       # short
+        "outseam": 40.0,
         "leg_opening": 23.5,
     }
     path = generate_5panel_json(m, "/tmp/clo_5panel_auto.json")
