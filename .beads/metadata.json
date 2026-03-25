@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "mare_pipeline",
+  "project_id": "40ce6ba8-589e-4ab4-9c75-cd38d9938498"
+}
