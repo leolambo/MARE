@@ -27,11 +27,22 @@ DEFAULT_CONSTRUCTION = {
     "seam_allowance": 0.625,
     "hem_allowance": 1.5,
     "waistband_width": 1.75,
-    "pocket_type": "slash",
-    "pocket_angle_deg": 30,
-    "back_pocket_type": "single_welt",
+    "pocket_type": "in_seam",       # front pocket: "in_seam" | "slash" (future)
+    "back_pocket_type": "patch",    # back pocket:  "patch"   | "welt"  (future)
     "fly_type": "standard_zip",
     "dart_count_back": 0,
+    # in_seam pocket overrides
+    "in_seam_drop": 1.5,
+    "in_seam_length": 7.0,
+    "in_seam_depth": 10.5,
+    "in_seam_width": 7.5,
+    "in_seam_facing_width": 1.5,
+    # patch pocket overrides
+    "patch_width": 6.0,
+    "patch_height": 6.5,
+    "patch_corner_r": 0.75,
+    "patch_drop": 3.5,
+    "patch_topstitch": 0.25,
 }
 
 DEFAULT_EASE = {"waist": 1.0, "hip": 2.0, "thigh": 2.0}

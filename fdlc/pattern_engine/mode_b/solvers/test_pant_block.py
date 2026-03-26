@@ -199,8 +199,8 @@ class TestPieceCount:
 
     EXPECTED_PIECES = [
         "front_panel", "back_panel", "waistband", "fly_shield",
-        "fly_extension", "front_pocket_bag", "back_pocket_welt",
-        "back_pocket_bag", "belt_loop_strip",
+        "fly_extension", "belt_loop_strip",
+        "front_pocket_facing", "front_pocket_bag", "back_pocket_patch",
     ]
 
     def test_all_pieces_present(self, solution):

@@ -19,6 +19,7 @@ from .annotate_dxf import (
     _vperp,
 )
 from .dxf_export import _add_layers, _draw_poly, to_dxf
+from ..pockets import in_seam as _pocket_in_seam, patch as _pocket_patch
 from .pattern_utils import (
     DEFAULT_CONSTRUCTION,
     DEFAULT_EASE,
@@ -89,13 +90,6 @@ def _build_front_panel(m: dict, c: dict, e: dict) -> dict:
     outline += list(reversed(cf_seam))[1:]
     outline += [wc[0]]
 
-    pocket_drop = 1.0
-    pocket_len = 6.5
-    pocket_angle = math.radians(c.get("pocket_angle_deg", 30))
-    pocket_a = (f_waist, -0.5 + pocket_drop)
-    pocket_b = (f_waist - math.cos(pocket_angle)*pocket_len,
-                -0.5 + pocket_drop + math.sin(pocket_angle)*pocket_len)
-
     x0, y0, x1, y1 = _bbox(outline)
     grain_x = f_hem / 2.0
 
@@ -105,7 +99,7 @@ def _build_front_panel(m: dict, c: dict, e: dict) -> dict:
         "mirror": True,
         "cut": outline,
         "grainline": [(grain_x, hip_y), (grain_x, hem_y - 2.0)],
-        "internal_lines": [[pocket_a, pocket_b]],
+        "internal_lines": [],   # pocket lines injected by solve()
         "notches": [((x_sk, knee_y), "knee"), ((0, knee_y), "knee")],
         "label_pos": ((x0+x1)/2, (y0+y1)/2),
         "meta": {
@@ -114,6 +108,8 @@ def _build_front_panel(m: dict, c: dict, e: dict) -> dict:
             "side_length": side_len,
             "hem_width": f_hem,
             "hip_width": f_hip,
+            "side_seam_waist": sw,
+            "side_seam_hem": (x_se, hem_y),
         },
     }
 
@@ -163,18 +159,13 @@ def _build_back_panel(m: dict, c: dict, e: dict, b_drop: float = 1.9) -> dict:
     x0, y0, x1, y1 = _bbox(outline)
     grain_x = b_hem / 2.0
 
-    pocket_y = hip_y + 2.25
-    pocket_w = 5.5
-    pocket_x = b_hip * 0.5
-    welt = [(pocket_x - pocket_w/2, pocket_y), (pocket_x + pocket_w/2, pocket_y)]
-
     return {
         "name": "back_panel",
         "count": 2,
         "mirror": True,
         "cut": outline,
         "grainline": [(grain_x, hip_y), (grain_x, hem_y - 2.0)],
-        "internal_lines": [welt],
+        "internal_lines": [],   # pocket lines injected by solve()
         "notches": [((x_sk, knee_y), "knee"), ((0, knee_y), "knee")],
         "label_pos": ((x0+x1)/2, (y0+y1)/2),
         "meta": {
@@ -241,12 +232,29 @@ def solve(measurements: dict, construction: dict | None = None, ease: dict | Non
         "meta": {},
     }
     fly_ext = _rect_piece("fly_extension", 1.5, fly_len)
-    pocket_bag = _rect_piece("front_pocket_bag", 6.0, 10.5, count=2, mirror=True)
-    back_welt = _rect_piece("back_pocket_welt", 5.5, 1.5, count=2, mirror=True)
-    back_bag = _rect_piece("back_pocket_bag", 6.0, 7.0, count=2, mirror=True)
     belt_loop = _rect_piece("belt_loop_strip", 17.5, 1.5)
 
-    pieces = [front, back, waistband, fly_shield, fly_ext, pocket_bag, back_welt, back_bag, belt_loop]
+    # ── Pocket modules ────────────────────────────────────────────────────
+    front_pocket_result = None
+    back_pocket_result = None
+    extra_pieces = []
+
+    front_pocket_type = c.get("pocket_type", "in_seam")
+    back_pocket_type = c.get("back_pocket_type", "patch")
+
+    if front_pocket_type == "in_seam":
+        front_pocket_result = _pocket_in_seam(front, m, c)
+        front["internal_lines"].extend(front_pocket_result["opening_lines"])
+        front["notches"].extend(front_pocket_result["opening_notches"])
+        extra_pieces.extend(front_pocket_result["pieces"])
+
+    if back_pocket_type == "patch":
+        back_pocket_result = _pocket_patch(back, m, c)
+        back["internal_lines"].extend(back_pocket_result["opening_lines"])
+        back["notches"].extend(back_pocket_result["opening_notches"])
+        extra_pieces.extend(back_pocket_result["pieces"])
+
+    pieces = [front, back, waistband, fly_shield, fly_ext, belt_loop] + extra_pieces
 
     for piece in pieces:
         piece["seam_allowance"] = c["seam_allowance"]
@@ -263,6 +271,10 @@ def solve(measurements: dict, construction: dict | None = None, ease: dict | Non
         "construction": c,
         "ease": e,
         "pieces": pieces,
+        "pockets": {
+            "front": front_pocket_result,
+            "back": back_pocket_result,
+        },
         "validation": {
             "front_inseam": round(front["meta"]["inseam_length"], 3),
             "back_inseam": round(back["meta"]["inseam_length"], 3),
