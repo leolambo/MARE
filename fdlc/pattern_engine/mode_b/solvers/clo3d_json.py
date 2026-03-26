@@ -385,8 +385,172 @@ def _mirror_lines(lines):
     return mirrored
 
 
-def _build_per_leg_seams(front_id, back_id, f_fracs, b_fracs, f_line_count, b_line_count):
-    """Build per-leg seams (side, inseam, waist) — excludes center/crotch which go cross-leg."""
+def _side_seam_line_lengths_mm(m):
+    """Compute the CLO3D arc lengths (mm) of the three side seam lines (1, 2, 3).
+
+    Line 1 = side_top (waist→hip), Line 2 = side_hip_knee, Line 3 = side_knee_hem.
+    Used to locate the in-seam pocket opening in CLO3D frac space.
+    """
+    lines = _build_front_lines(m)
+    return [_clo_bezier_arc_length(lines[i]) for i in [1, 2, 3]]
+
+
+def _clo_bezier_arc_length(line, samples=32):
+    """Approximate arc length of a CLO3D line in mm via de Casteljau sampling."""
+    pts = line["PointList"]
+    if len(pts) == 2:
+        # Straight line
+        dx = pts[1]["Position"]["x"] - pts[0]["Position"]["x"]
+        dy = pts[1]["Position"]["y"] - pts[0]["Position"]["y"]
+        return math.hypot(dx, dy)
+    # Cubic bezier
+    p = [(pt["Position"]["x"], pt["Position"]["y"]) for pt in pts]
+    total = 0.0
+    prev = p[0]
+    for i in range(1, samples + 1):
+        t = i / samples
+        mt = 1 - t
+        x = mt**3*p[0][0] + 3*mt**2*t*p[1][0] + 3*mt*t**2*p[2][0] + t**3*p[3][0]
+        y = mt**3*p[0][1] + 3*mt**2*t*p[1][1] + 3*mt*t**2*p[2][1] + t**3*p[3][1]
+        total += math.hypot(x - prev[0], y - prev[1])
+        prev = (x, y)
+    return total
+
+
+def _pocket_opening_fracs(m, construction, f_fracs):
+    """Compute CLO3D perimeter fracs for the in-seam pocket opening on the front panel.
+
+    The opening sits on the side seam. We locate it by measuring along the side seam
+    from the waist in mm, then converting to perimeter fracs.
+
+    Returns (frac_open_top, frac_open_bot) in CLO3D perimeter space, or None if
+    no in-seam pocket is configured.
+    """
+    if construction.get("pocket_type") != "in_seam":
+        return None
+
+    drop_in   = float(construction.get("in_seam_drop",   1.5))
+    length_in = float(construction.get("in_seam_length", 7.0))
+    drop_mm   = drop_in   * INCH_TO_MM
+    length_mm = length_in * INCH_TO_MM
+
+    # Side seam lines: 1=waist→hip, 2=hip→knee, 3=knee→hem
+    # Walk along these lines from waist to locate opening endpoints.
+    lines = _build_front_lines(m)
+    line1_mm = _clo_bezier_arc_length(lines[1])
+    line2_mm = _clo_bezier_arc_length(lines[2])
+    line3_mm = _clo_bezier_arc_length(lines[3])
+    side_total_mm = line1_mm + line2_mm + line3_mm
+
+    # Total perimeter of the front panel for converting to global fracs
+    all_lengths = [_clo_bezier_arc_length(line) for line in lines]
+    perim_mm = sum(all_lengths)
+    cumulative = [0.0]
+    for l in all_lengths:
+        cumulative.append(cumulative[-1] + l)
+
+    # Opening top: drop_mm along the side seam from waist end of line 1
+    # Line 1 starts at waist (its start = f_fracs[1] boundary)
+    # Opening top is at frac_of_line1 = drop_mm / line1_mm (clamped to line 1)
+    top_along_side = drop_mm
+    bot_along_side = drop_mm + length_mm
+
+    def _side_dist_to_perim_frac(dist_along_side):
+        """Convert distance along the side seam (from waist) to panel perimeter frac."""
+        # Side seam lines start at line 1's start = cumulative[1] from panel start
+        abs_dist = cumulative[1] + dist_along_side
+        return abs_dist / perim_mm
+
+    frac_top = _side_dist_to_perim_frac(top_along_side)
+    frac_bot = _side_dist_to_perim_frac(bot_along_side)
+
+    # Clamp to side seam range [f_fracs[1], f_fracs[4]]
+    frac_top = max(f_fracs[1], min(f_fracs[4], frac_top))
+    frac_bot = max(f_fracs[1], min(f_fracs[4], frac_bot))
+
+    return (round(frac_top, 5), round(frac_bot, 5))
+
+
+def _build_in_seam_pocket_pieces(fabric_uuid, offset_x=1600, m=None, construction=None):
+    """Build CLO3D pocket bag + facing pattern pieces for in-seam pocket.
+
+    Returns (facing_pat, facing_id, bag_pat, bag_id) or None if no pocket.
+    The facing is attached to the front panel at the opening.
+    The bag hangs behind, sewn to the facing.
+
+    For CLO3D simulation these are flat rectangular pieces — the solver's
+    kidney shape is the IRL cut shape. CLO sims with simpler rectangles.
+    """
+    if not construction or construction.get("pocket_type") != "in_seam":
+        return None
+
+    length_in = float(construction.get("in_seam_length",      7.0))
+    depth_in  = float(construction.get("in_seam_depth",      10.5))
+    width_in  = float(construction.get("in_seam_width",       7.5))
+    facing_in = float(construction.get("in_seam_facing_width", 1.5))
+
+    length_mm = length_in * INCH_TO_MM
+    depth_mm  = depth_in  * INCH_TO_MM
+    width_mm  = width_in  * INCH_TO_MM
+    facing_mm = facing_in * INCH_TO_MM
+
+    def _rect_clo(name, w, h, offset_x):
+        """Build a simple rectangular CLO3D pattern (5 lines, closed)."""
+        def _pt(x, y):
+            return {"ID": _uid(), "PointType": "Straight",
+                    "Position": {"x": x + offset_x, "y": y}, "GradingRuleID": 0}
+        # Lines: bottom, right, top, left — 4 lines, 2 pts each
+        lines = [
+            {"ID": _uid(), "PointList": [_pt(0, 0),    _pt(w, 0)]},    # 0: bottom
+            {"ID": _uid(), "PointList": [_pt(w, 0),    _pt(w, h)]},    # 1: right
+            {"ID": _uid(), "PointList": [_pt(w, h),    _pt(0, h)]},    # 2: top
+            {"ID": _uid(), "PointList": [_pt(0, h),    _pt(0, 0)]},    # 3: left (= opening side)
+        ]
+        # Share endpoints between consecutive lines
+        for i in range(len(lines) - 1):
+            lines[i+1]["PointList"][0]["ID"] = lines[i]["PointList"][-1]["ID"]
+            lines[i+1]["PointList"][0]["Position"] = dict(lines[i]["PointList"][-1]["Position"])
+        lines[0]["PointList"][0]["ID"] = lines[-1]["PointList"][-1]["ID"]
+        lines[0]["PointList"][0]["Position"] = dict(lines[-1]["PointList"][-1]["Position"])
+
+        arr = {"PointName": "Arrangement Point", "fOffSetX": 0.0, "fOffSetY": 0.0, "fAngle": 0.0}
+        pat_id = _uid()
+        return {
+            "Name": name,
+            "fGrainlineAngle": 0.0,
+            "ID": pat_id,
+            "IsHalfSymmetric": False,
+            "strGrainlineOrientation": "One Way",
+            "strSuperImposeSide": "None",
+            "CurrentFabricUUID": fabric_uuid,
+            "IsClosed": True,
+            "InternalLineList": [],
+            "ButtonHeadList": [], "ButtonHoleList": [], "NotchList": [], "AnnotationList": [],
+            "ShapeInfo": {"IsSlashed": False, "LineList": lines},
+            "ArrangementPointDataMap": arr,
+        }, pat_id
+
+    facing_pat, facing_id = _rect_clo("Pocket_Facing_L", facing_mm, length_mm, offset_x)
+    bag_pat,    bag_id    = _rect_clo("Pocket_Bag_L",    width_mm,  depth_mm,  offset_x + facing_mm + 50)
+
+    return facing_pat, facing_id, bag_pat, bag_id
+
+
+def _pocket_fracs_for_rect(w, h):
+    """Perimeter fracs for a rectangle: [0=bottom-start, 1=bottom-end/right-start,
+    2=right-end/top-start, 3=top-end/left-start, 4=left-end=1.0]"""
+    perim = 2 * (w + h)
+    return [0.0, w/perim, (w+h)/perim, (2*w+h)/perim, 1.0]
+
+
+def _build_per_leg_seams(front_id, back_id, f_fracs, b_fracs, f_line_count, b_line_count,
+                          pocket_fracs=None):
+    """Build per-leg seams (side, inseam, waist) — excludes center/crotch.
+
+    If pocket_fracs is provided as (frac_top, frac_bot), the side seam is split
+    into three segments: above opening, [opening gap — omitted], below opening.
+    This leaves the pocket opening open in the side seam for CLO3D simulation.
+    """
     pairs = [
         ("side_top", 1, 1),
         ("side_hip_knee", 2, 2),
@@ -397,26 +561,70 @@ def _build_per_leg_seams(front_id, back_id, f_fracs, b_fracs, f_line_count, b_li
     ]
 
     seams = []
+
     for name, fi, bi in pairs:
-        seam = {
-            "Name": name,
-            "bIsTurned": False,
-            "PairList": [{
-                "First": {
-                    "ShapeID": back_id,
-                    "LengthParam": {"fStart": b_fracs[bi+1], "fEnd": b_fracs[bi]},
-                    "Direction": False,
-                },
-                "Second": {
-                    "ShapeID": front_id,
-                    "LengthParam": {"fStart": f_fracs[fi+1], "fEnd": f_fracs[fi]},
-                    "Direction": False,
-                },
-            }],
-            "FoldData": {"iAngle": 180, "iStrength": 5},
-        }
-        seams.append(seam)
+        # Side seam segments get special treatment when pocket is present
+        if pocket_fracs and name in ("side_top", "side_hip_knee", "side_knee_hem"):
+            pocket_top, pocket_bot = pocket_fracs
+            seg_start = f_fracs[fi]
+            seg_end   = f_fracs[fi + 1]
+
+            # Check if this segment overlaps the pocket opening
+            overlap_start = max(seg_start, pocket_top)
+            overlap_end   = min(seg_end,   pocket_bot)
+
+            if overlap_end <= overlap_start:
+                # No overlap — sew full segment normally
+                seams.append(_make_seam(name, back_id, b_fracs[bi], b_fracs[bi+1],
+                                         front_id, f_fracs[fi], f_fracs[fi+1]))
+            else:
+                # Segment overlaps pocket opening — split into sewn parts
+                # Part A: from seg_start to pocket_top (above opening)
+                if pocket_top > seg_start + 0.001:
+                    seams.append(_make_seam(
+                        name + "_above",
+                        back_id,  _remap(pocket_top,  seg_start, seg_end, b_fracs[bi], b_fracs[bi+1]),
+                                  _remap(seg_start,   seg_start, seg_end, b_fracs[bi], b_fracs[bi+1]),
+                        front_id, f_fracs[fi], pocket_top,
+                    ))
+                # Gap: pocket_top → pocket_bot — no seam (this is the opening)
+                # Part B: from pocket_bot to seg_end (below opening)
+                if pocket_bot < seg_end - 0.001:
+                    seams.append(_make_seam(
+                        name + "_below",
+                        back_id,  _remap(seg_end,     seg_start, seg_end, b_fracs[bi], b_fracs[bi+1]),
+                                  _remap(pocket_bot,  seg_start, seg_end, b_fracs[bi], b_fracs[bi+1]),
+                        front_id, pocket_bot, f_fracs[fi+1],
+                    ))
+        else:
+            seams.append(_make_seam(name, back_id, b_fracs[bi], b_fracs[bi+1],
+                                     front_id, f_fracs[fi], f_fracs[fi+1]))
+
     return seams
+
+
+def _remap(val, src_lo, src_hi, dst_lo, dst_hi):
+    """Linear remap val from [src_lo, src_hi] → [dst_lo, dst_hi]."""
+    if abs(src_hi - src_lo) < 1e-9:
+        return dst_lo
+    t = (val - src_lo) / (src_hi - src_lo)
+    return dst_lo + t * (dst_hi - dst_lo)
+
+
+def _make_seam(name, first_id, first_start, first_end, second_id, second_start, second_end):
+    return {
+        "Name": name,
+        "bIsTurned": False,
+        "PairList": [{
+            "First":  {"ShapeID": first_id,
+                       "LengthParam": {"fStart": first_start, "fEnd": first_end},
+                       "Direction": False},
+            "Second": {"ShapeID": second_id,
+                       "LengthParam": {"fStart": second_start, "fEnd": second_end},
+                       "Direction": False},
+        }],
+        "FoldData": {"iAngle": 180, "iStrength": 5},
+    }
 
 
 def _build_cross_leg_seams(fl_id, fr_id, bl_id, br_id, f_fracs, b_fracs, f_line_count):
@@ -486,17 +694,29 @@ def _build_wb_piece(name, width_mm, height_mm, fabric_uuid, offset_x=0):
     return _build_pattern(name, lines, fabric_uuid, offset_x=offset_x)
 
 
-def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1.9) -> str:
+def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1.9,
+                          construction: dict | None = None) -> str:
     """
-    Generate 6-panel CLO3D JSON: FL, FR, BL, BR + 2 waistband pieces (front + back).
+    Generate CLO3D JSON: FL, FR, BL, BR + 2 waistband pieces + optional pocket pieces.
 
     CLO3D-specific: 2 waistband pieces for simulation.
     IRL pattern uses single waistband — see pant_block.py/dxf_export.py.
 
     Right panels have mirrored geometry. Seams include per-leg (side, inseam),
-    cross-leg (center front/back, crotch), and waistband-to-leg + WB-to-WB.
+    cross-leg (center front/back, crotch), waistband-to-leg + WB-to-WB,
+    and pocket seams when pocket_type="in_seam" is in construction.
+
+    Args:
+        measurements: body measurements dict
+        output_path:  output file path
+        b_drop:       back crotch drop (auto-tuned by pant_block solver)
+        construction: optional construction config dict. Supports:
+                      pocket_type="in_seam" to add in-seam front pocket seams.
+                      in_seam_drop, in_seam_length, in_seam_depth, in_seam_width,
+                      in_seam_facing_width to tune pocket dimensions.
     """
     m = measurements
+    c = construction or {}
     fabric_uuid = _uid()
 
     # Left leg (original geometry), Right leg (mirrored)
@@ -536,10 +756,15 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
     fwb_fracs = _wb_fracs(fwb_w, wb_h)
     bwb_fracs = _wb_fracs(bwb_w, wb_h)
 
-    # Per-leg seams (side, inseam — NO waist, waist goes to WB)
-    left_seams = _build_per_leg_seams(fl_id, bl_id, f_fracs, b_fracs, len(f_clean), len(b_clean))
-    right_seams = _build_per_leg_seams(fr_id, br_id, f_fracs, b_fracs, len(f_clean), len(b_clean))
-    left_seams = [s for s in left_seams if s["Name"] != "waist"]
+    # ── Pocket fracs (in-seam front pocket) ──────────────────────────────
+    pocket_fracs = _pocket_opening_fracs(m, c, f_fracs)
+
+    # ── Per-leg seams (side split at opening if pocket present) ──────────
+    left_seams  = _build_per_leg_seams(fl_id, bl_id, f_fracs, b_fracs, len(f_clean), len(b_clean),
+                                        pocket_fracs=pocket_fracs)
+    right_seams = _build_per_leg_seams(fr_id, br_id, f_fracs, b_fracs, len(f_clean), len(b_clean),
+                                        pocket_fracs=pocket_fracs)
+    left_seams  = [s for s in left_seams  if s["Name"] != "waist"]
     right_seams = [s for s in right_seams if s["Name"] != "waist"]
     for s in left_seams:
         s["Name"] += "_L"
@@ -679,8 +904,83 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
         "FoldData": {"iAngle": 180, "iStrength": 5},
     })
 
-    all_seams = left_seams + right_seams + cross_seams + wb_seams
-    patterns = [fl_pat, fr_pat, bl_pat, br_pat, fwb_pat, bwb_pat]
+    # ── In-seam pocket pieces + seams ────────────────────────────────────
+    pocket_seams = []
+    pocket_patterns = []
+
+    # Two sets of pocket pieces — one per leg (L and R)
+    # Each facing sewn to one front panel only, no shared references.
+    pocket_result_L = _build_in_seam_pocket_pieces(fabric_uuid, offset_x=1600, m=m, construction=c)
+    pocket_result_R = _build_in_seam_pocket_pieces(fabric_uuid, offset_x=1900, m=m, construction=c)
+
+    if pocket_result_L and pocket_result_R and pocket_fracs:
+        facing_pat_L, facing_id_L, bag_pat_L, bag_id_L = pocket_result_L
+        facing_pat_R, facing_id_R, bag_pat_R, bag_id_R = pocket_result_R
+
+        # Rename R pieces
+        facing_pat_R["Name"] = "Pocket_Facing_R"
+        bag_pat_R["Name"]    = "Pocket_Bag_R"
+
+        pocket_patterns = [facing_pat_L, bag_pat_L, facing_pat_R, bag_pat_R]
+
+        length_in = float(c.get("in_seam_length",      7.0))
+        depth_in  = float(c.get("in_seam_depth",      10.5))
+        width_in  = float(c.get("in_seam_width",       7.5))
+        facing_in = float(c.get("in_seam_facing_width", 1.5))
+
+        length_mm = length_in * INCH_TO_MM
+        depth_mm  = depth_in  * INCH_TO_MM
+        width_mm  = width_in  * INCH_TO_MM
+        facing_mm = facing_in * INCH_TO_MM
+
+        facing_pf = _pocket_fracs_for_rect(facing_mm, length_mm)
+        bag_pf    = _pocket_fracs_for_rect(width_mm,  depth_mm)
+        frac_top, frac_bot = pocket_fracs
+
+        # FL ↔ Facing_L (left edge of facing, line 3)
+        pocket_seams.append(_make_seam(
+            "pocket_FL_to_facing",
+            fl_id,       frac_top,        frac_bot,
+            facing_id_L, facing_pf[3],    facing_pf[4],
+        ))
+
+        # FR ↔ Facing_R (left edge of facing, line 3)
+        pocket_seams.append(_make_seam(
+            "pocket_FR_to_facing",
+            fr_id,       frac_top,        frac_bot,
+            facing_id_R, facing_pf[3],    facing_pf[4],
+        ))
+
+        # Facing_L top ↔ Bag_L top
+        pocket_seams.append(_make_seam(
+            "pocket_facing_to_bag_top_L",
+            facing_id_L, facing_pf[1], facing_pf[2],
+            bag_id_L,    bag_pf[1],    bag_pf[2],
+        ))
+
+        # Facing_L bottom ↔ Bag_L bottom
+        pocket_seams.append(_make_seam(
+            "pocket_facing_to_bag_bot_L",
+            facing_id_L, facing_pf[0], facing_pf[1],
+            bag_id_L,    bag_pf[0],    bag_pf[1],
+        ))
+
+        # Facing_R top ↔ Bag_R top
+        pocket_seams.append(_make_seam(
+            "pocket_facing_to_bag_top_R",
+            facing_id_R, facing_pf[1], facing_pf[2],
+            bag_id_R,    bag_pf[1],    bag_pf[2],
+        ))
+
+        # Facing_R bottom ↔ Bag_R bottom
+        pocket_seams.append(_make_seam(
+            "pocket_facing_to_bag_bot_R",
+            facing_id_R, facing_pf[0], facing_pf[1],
+            bag_id_R,    bag_pf[0],    bag_pf[1],
+        ))
+
+    all_seams = left_seams + right_seams + cross_seams + wb_seams + pocket_seams
+    patterns = [fl_pat, fr_pat, bl_pat, br_pat, fwb_pat, bwb_pat] + pocket_patterns
     pat_ids = [p["ID"] for p in patterns]
 
     clo_data = {
