@@ -54,7 +54,7 @@ def _build_front_panel(m: dict, c: dict, e: dict) -> dict:
     knee_y = hem_y - float(m["inseam"]) * 0.52
 
     waist_half = float(m["waist"]) / 2.0
-    hip_half = float(m["hip"])  # already flat (half circumference) — do NOT halve again
+    hip_half = float(m["hip"]) / 2.0
 
     f_waist = waist_half * 0.48 + 1.0
     f_hip = hip_half * 0.48 + 0.5
@@ -122,7 +122,7 @@ def _build_back_panel(m: dict, c: dict, e: dict, b_drop: float = 1.9) -> dict:
     knee_y = hem_y - float(m["inseam"]) * 0.52
 
     waist_half = float(m["waist"]) / 2.0
-    hip_half = float(m["hip"])  # already flat (half circumference) — do NOT halve again
+    hip_half = float(m["hip"]) / 2.0
 
     b_waist = waist_half * 0.52 - 1.0
     b_hip = hip_half * 0.52 + 1.5 - 3.4
