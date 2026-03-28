@@ -19,7 +19,7 @@ from fdlc.pattern_engine.mode_b.solvers.pattern_utils import (
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 SAMPLE_MEASUREMENTS = {
-    "waist": 30.0, "hip": 52.0,
+    "waist": 30.0, "hip": 26.0,  # flat (half circumference) — solver no longer halves hip
     "front_rise": 12.75, "back_rise": 14.75,
     "inseam": 28.5, "outseam": 40.5,
     "thigh": 28.0, "leg_opening": 23.5,
@@ -249,7 +249,7 @@ class TestInputValidation:
 
     def test_different_sizes(self):
         """Solver should work for different body sizes without crashing."""
-        for waist, hip in [(28, 48), (32, 54), (36, 58), (40, 62)]:
+        for waist, hip in [(28, 24), (32, 27), (36, 29), (40, 31)]:  # hip = flat half-circ
             m = dict(SAMPLE_MEASUREMENTS)
             m["waist"] = waist
             m["hip"] = hip
