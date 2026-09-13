@@ -1,0 +1,32 @@
+{
+  "artifacts": {
+    "clo-export": {
+      "patterns": 2,
+      "physical_edges": "passed",
+      "seam_groups": 0,
+      "seam_sides": 0,
+      "sha256": "e3a717be7b3254840f941118a341c18f27c5372ec48ae9c920f1497f2c40151b"
+    },
+    "panels": {
+      "patterns": 2,
+      "physical_edges": "passed",
+      "seam_groups": 1,
+      "seam_sides": 2,
+      "sha256": "d509c176236d5a01303ac8edf3fd82728def9c8cede6e6d2d57c25e679e96204"
+    },
+    "sewn": {
+      "patterns": 2,
+      "physical_edges": "passed",
+      "seam_groups": 1,
+      "seam_sides": 2,
+      "sha256": "052dd7e2bd8b7ffd6afa5442755d5f7c71830905e7976bf5654c8dcb38a563aa"
+    }
+  },
+  "checks": {
+    "roundtrip": "passed"
+  },
+  "errors": [],
+  "missing_stages": [],
+  "status": "passed",
+  "evidence_kind": "synthetic-only-not-CLO-integration-proof"
+}

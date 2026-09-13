@@ -25,6 +25,78 @@ Scripts for the CLO3D 3D simulation workflow. CLO3D ignores seams from freshly g
 
 7. Simulate via spacebar
 
+## Offline artifact verification (no CLO or MCP access)
+
+Keep `verify_artifacts.py` beside `02_inject_seams.py`. Both use only Python's
+standard library; the injector's positional arguments and callable interface are
+unchanged. The output must now be **new**: existing files, input aliases, and
+symlinks are refused by exclusive creation. Choose a versioned output rather than
+overwriting. Inputs and CLO export arrangement/metadata are preserved.
+
+From this directory:
+
+```bash
+# Any explicitly supplied subset is useful; missing stages remain unknown.
+python3 verify_artifacts.py --panels /path/panels.json
+python3 verify_artifacts.py --panels /path/panels.json \
+  --clo-export /path/clo-export.json --sewn /path/sewn.json
+# Historical file with no proven stage: run each variant separately.
+python3 verify_artifacts.py --artifact /path/retained-reference.json
+```
+
+Stdout is a JSON manifest with byte SHA-256 fingerprints, counts, static error
+codes and check status. No paths, names, IDs, geometry or raw parse errors are
+printed. Fingerprints permit correlation and are **not anonymization**. Redirection
+is optional and performed by your shell, not by the read-only verifier.
+
+Exit status: **0** all implemented offline checks passed with all three stages and
+nonempty, resolvable whole-line seams; **1** invalid/unreadable artifact or stage
+mismatch; **2** incomplete/unknown (also argparse usage errors). An incomplete
+report can have no errors. `checks.roundtrip=passed` means only structural
+agreement of the supplied stage files, not host provenance or successful import.
+
+### Checks and intentional limits
+
+- Pattern names and string IDs must be nonempty and unique; ID/ShapeID aliases
+  must agree if both exist. Names match exactly, with no trimming or case folding.
+  All present stages must have identical name sets, establishing a total bijection.
+- Remapping only changes `PairList[].First/Second.ShapeID`, once, without chained
+  replacements or altering seam names/metadata. Source-to-sewn seams and
+  export-to-sewn non-seam content are compared with type-sensitive canonical JSON.
+  List order is significant; whitespace/object-key order is not.
+- Supported units are mm. Supported seam sides are exactly ShapeID, Direction
+  plus either LineID or LengthParam `{fStart,fEnd}`. Direction must be a JSON
+  boolean; fractions must be finite numbers in [0,1], not booleans. Descending
+  fractions are accepted. Duplicate JSON keys and all nonfinite numbers fail.
+  Unknown seam group/pair/side structure is rejected rather than silently remapped.
+  Optional group `Name` must be a string (empty labels remain supported),
+  `bIsTurned` must be a JSON boolean, and present `FoldData` must be exactly
+  `{iAngle, iStrength}` with integer values, excluding booleans. This is the
+  generator/retained-reference structure; missing/extra keys, nested references,
+  nulls and other types fail closed. Omitted metadata remains supported. Fold
+  settings are type-checked, not certified for CLO physical ranges or semantics.
+- A LineID references an outline line within its pattern. Reuse of that **whole
+  physical line** is a conflict regardless of Direction or group. Present outline
+  IDs must be unique per panel. Generator waistband lines can omit IDs; these
+  cannot satisfy LineID references. Shared endpoint IDs are intentionally not
+  globally rejected, and point/curve geometry is not otherwise validated.
+- LengthParam-only records get exact repeated-reference checks, **not physical
+  overlap clearance**. Perimeter wrap/direction/edge correspondence semantics are
+  not established here; even a complete valid LengthParam bundle stays incomplete.
+  Mixed LineID+LengthParam and unrecognized partial-line encodings fail schema
+  validation; no interval interpretation is invented.
+- No proof of CLO geometry equivalence across generation/export, correct seam
+  orientation, fabric physics, arrangement, simulation, saved-project persistence,
+  asset closure, or matching live project is supplied. Unique names are a mapping
+  convention, not independently authenticated identity. No host API is called.
+- Use explicit trusted local files. Parsing is in memory, not a hostile-input
+  sandbox; fingerprints identify bytes read, not atomic provenance against a
+  concurrent writer. Injection is no-clobber, not transactional against disk I/O
+  failure: a failed new output write can leave a partial new file.
+
+Regression tests and recorded evidence: `test_artifact_verifier.py` and
+[`docs/evidence/offline-artifacts/REPORT.md`](../../../../../docs/evidence/offline-artifacts/REPORT.md).
+
 ## Script Editor Rules
 
 - All API calls require `import pattern_api` — functions are NOT bare globals

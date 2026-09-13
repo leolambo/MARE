@@ -1,0 +1,21 @@
+{
+  "artifacts": {
+    "artifact": {
+      "patterns": 6,
+      "physical_edges": "unknown",
+      "seam_groups": 20,
+      "seam_sides": 40,
+      "sha256": "e97d6fbc5aa8eee514697c20142f0da2b42520feefca14d24441a305bd0fd095"
+    }
+  },
+  "checks": {
+    "roundtrip": "unknown"
+  },
+  "errors": [],
+  "missing_stages": [
+    "panels",
+    "clo-export",
+    "sewn"
+  ],
+  "status": "incomplete"
+}

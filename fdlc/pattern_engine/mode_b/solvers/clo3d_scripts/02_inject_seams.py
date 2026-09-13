@@ -1,67 +1,49 @@
-#!/usr/bin/env python3
-"""
-Seam injection script — run on Mac, NOT in CLO3D.
+"""Offline seam injection; run on Mac, not inside CLO.
 
-Reads the generated panels JSON and CLO3D's export JSON,
-remaps pattern IDs, injects seams, writes the sewn JSON.
-
-Usage:
-    python3 02_inject_seams.py <panels.json> <export.json> <sewn_output.json>
-
-Or import and call inject_seams() directly.
+Usage: python3 02_inject_seams.py panels.json clo-export.json NEW-sewn.json
+The output must not already exist. Input artifacts are never overwritten.
 """
 
+import importlib.util
 import json
 import sys
+from pathlib import Path
+
+# Resolve the sibling by exact path, including importlib-based callers; no CLO imports.
+_spec = importlib.util.spec_from_file_location(
+    "mare_artifact_verifier", Path(__file__).with_name("verify_artifacts.py")
+)
+assert _spec is not None and _spec.loader is not None
+_verifier = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_verifier)
 
 
 def inject_seams(panels_path: str, export_path: str, output_path: str) -> str:
-    """Inject seams from panels JSON into CLO3D export, remapping pattern IDs.
-
-    Args:
-        panels_path: path to our generated JSON (has seams with our IDs)
-        export_path: path to CLO3D's export JSON (has real IDs)
-        output_path: path to write the sewn JSON
-
-    Returns:
-        output file path
-    """
-    with open(panels_path) as f:
-        our_data = json.load(f)
-    with open(export_path) as f:
-        clo_data = json.load(f)
-
-    # Build ID remap: our ID → CLO3D's ID, matched by pattern name
-    our_name_to_id = {p["Name"]: p["ID"] for p in our_data["PatternList"]}
-    clo_name_to_id = {
-        p["Name"]: (p.get("ShapeID") or p.get("ID"))
-        for p in clo_data["PatternList"]
-    }
-
-    id_remap = {}
-    for name in our_name_to_id:
-        if name in clo_name_to_id:
-            id_remap[our_name_to_id[name]] = clo_name_to_id[name]
-
-    # Deep-replace all ShapeID references in seams
-    seams = our_data["SeamLinePairGroupList"]
-    seams_json = json.dumps(seams)
-    for old_id, new_id in id_remap.items():
-        seams_json = seams_json.replace('"' + old_id + '"', '"' + new_id + '"')
-    seams = json.loads(seams_json)
-
-    # Inject into CLO3D export (preserves CLO3D's arrangement data)
-    clo_data["SeamLinePairGroupList"] = seams
-
-    with open(output_path, "w") as f:
-        json.dump(clo_data, f, indent=2)
-
-    print(f"Sewn: {output_path}, Seams: {len(seams)}")
+    """Validate and copy the export, changing only exact seam ShapeID values."""
+    with open(panels_path) as stream:
+        source = _verifier.parse(stream.read())
+    with open(export_path) as stream:
+        target = _verifier.parse(stream.read())
+    result = _verifier.remap_seams(source, target)
+    payload = json.dumps(result, indent=2, allow_nan=False)
+    with open(output_path, "x") as stream:
+        stream.write(payload)
+    print(
+        "Sewn artifact written; seam groups: "
+        + str(len(result["SeamLinePairGroupList"]))
+    )
     return output_path
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
-        print("Usage: python3 02_inject_seams.py <panels.json> <export.json> <sewn_output.json>")
-        sys.exit(1)
-    inject_seams(sys.argv[1], sys.argv[2], sys.argv[3])
+        print(__doc__, file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        inject_seams(*sys.argv[1:])
+    except (ValueError, OSError):
+        print(
+            "Injection rejected: invalid inputs or unavailable new output.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
