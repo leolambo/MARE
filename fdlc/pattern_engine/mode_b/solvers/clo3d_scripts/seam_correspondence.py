@@ -145,7 +145,8 @@ def correspond(source, target):
                                   for key in ('fStart', 'fEnd')]
                 side['ShapeID'] = ident
                 require(start != end and (start, end) != (len(matches), 0), 'empty-or-ambiguous-interval')
-                selected = set(range(start, end)) if start < end else set(range(start, len(matches))) | set(range(end))
+                # Legacy generator recipes name index boundaries, not wrap intent.
+                selected = set(range(min(start, end), max(start, end)))
                 used = occupied.setdefault(ident, set())
                 require(not used.intersection(selected), 'physical-interval-overlap')
                 used.update(selected)
@@ -168,10 +169,15 @@ def correspond(source, target):
     }
 
 def check_intervals(data, legacy=False):
-    """Check physical reuse in schema-validated data, including mixed references."""
+    """Recover legacy recipe occupancy, or apply the unchanged target check.
+
+    The target forward/wrap check is not established CLO LengthParam semantics.
+    """
     indices = {}
+    source_boundaries = {}
     for pattern in data['PatternList']:
         fractions = boundaries(lengths(points(pattern), legacy=legacy))
+        source_boundaries[pattern.get('ID', pattern.get('ShapeID'))] = fractions
         indices[pattern.get('ID', pattern.get('ShapeID'))] = {
             edge.get('ID', edge.get('ShapeID')): (fractions[i], fractions[i+1])
             for i, edge in enumerate(pattern['ShapeInfo']['LineList'])
@@ -186,7 +192,13 @@ def check_intervals(data, legacy=False):
                 else:
                     start, end = (side['LengthParam'][key] for key in ('fStart', 'fEnd'))
                 require(start != end and (start, end) != (1, 0), 'empty-or-ambiguous-interval')
-                intervals = [(start, end)] if start < end else [(start, 1), (0, end)]
+                if legacy:
+                    start, end = [snap(value, source_boundaries[ident]) for value in (start, end)]
+                    require(start != end and (start, end) != (len(source_boundaries[ident])-1, 0),
+                            'empty-or-ambiguous-interval')
+                    intervals = [(min(start, end), max(start, end))]
+                else:
+                    intervals = [(start, end)] if start < end else [(start, 1), (0, end)]
                 previous = used.setdefault(ident, [])
                 for a, b in intervals:
                     require(all(min(b, d) <= max(a, c) for c, d in previous), 'physical-interval-overlap')

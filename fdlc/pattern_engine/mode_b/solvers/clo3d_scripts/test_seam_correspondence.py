@@ -249,7 +249,7 @@ def test_reverse_cubic_preserves_actual_section_and_direction_false():
     assert report['categories']['reversed'] == 2
 
 @pytest.mark.parametrize('overlap', [False, True])
-def test_wraparound_physical_coverage_allows_shared_endpoints_only(overlap):
+def test_legacy_descending_coverage_allows_shared_endpoints_only(overlap):
     source = document()
     pair = source['SeamLinePairGroupList'][0]['PairList'][0]
     for side in pair.values():
@@ -257,7 +257,7 @@ def test_wraparound_physical_coverage_allows_shared_endpoints_only(overlap):
     extra = copy.deepcopy(pair)
     for side in extra.values():
         side['Direction'] = False
-        side['LengthParam'] = {'fStart': 0 if overlap else .25, 'fEnd': .5}
+        side['LengthParam'] = {'fStart': .25 if overlap else 0, 'fEnd': .5 if overlap else .25}
     source['SeamLinePairGroupList'][0]['PairList'].append(extra)
     if overlap:
         with pytest.raises(ValueError, match='physical-interval-overlap'):
@@ -265,3 +265,53 @@ def test_wraparound_physical_coverage_allows_shared_endpoints_only(overlap):
     else:
         result, _ = api().correspond(source, export_of(source))
         assert result['SeamLinePairGroupList'][0]['PairList'][0]['First']['LengthParam'] == {'fStart': .75, 'fEnd': .25}
+
+@pytest.mark.parametrize('entrypoint', ['correspond', 'legacy-check'])
+@pytest.mark.parametrize('probe_section', [0, 1, 2, 3])
+def test_legacy_indices_2_1_occupy_exactly_section_1(entrypoint, probe_section):
+    source = document()
+    pair = source['SeamLinePairGroupList'][0]['PairList'][0]
+    for side in pair.values():
+        side['LengthParam'] = {'fStart': .5, 'fEnd': .25}
+    extra = copy.deepcopy(pair)
+    for side in extra.values():
+        side['LengthParam'] = {'fStart': probe_section / 4, 'fEnd': (probe_section + 1) / 4}
+        side['Direction'] = False
+    source['SeamLinePairGroupList'][0]['PairList'].append(extra)
+    module = api()
+    def run():
+        if entrypoint == 'legacy-check':
+            return module.check_intervals(source, legacy=True)
+        return module.correspond(source, export_of(source))
+    if probe_section == 1:
+        with pytest.raises(ValueError, match='physical-interval-overlap'):
+            run()
+    else:
+        run()
+
+@pytest.mark.parametrize('direction', [False, True])
+def test_multiple_descending_legacy_sections_map_without_swapping(direction):
+    # Independent generator-equivalent boundary recipe: section 1 then section 2.
+    source = document()
+    pairs = source['SeamLinePairGroupList'][0]['PairList']
+    pairs.append(copy.deepcopy(pairs[0]))
+    for pair, endpoints in zip(pairs, [(.5, .25), (.75, .5)]):
+        for side in pair.values():
+            side['LengthParam'] = dict(zip(('fStart', 'fEnd'), endpoints))
+            side['Direction'] = direction
+    before = copy.deepcopy(source)
+    result, report = api().correspond(source, export_of(source))
+    assert report['coverage']['sewn_sections'] == 4
+    for pair, original in zip(result['SeamLinePairGroupList'][0]['PairList'], pairs):
+        assert list(pair) == ['First', 'Second']
+        for key in pair:
+            assert pair[key] == {**original[key], 'ShapeID': original[key]['ShapeID'] + '-export'}
+            assert pair[key]['LengthParam']['fStart'] > pair[key]['LengthParam']['fEnd']
+            assert pair[key]['Direction'] is direction
+    assert source == before
+
+def test_legacy_interval_check_requires_boundary_snap():
+    source = document()
+    source['SeamLinePairGroupList'][0]['PairList'][0]['First']['LengthParam'] = {'fStart': .5, 'fEnd': .125}
+    with pytest.raises(ValueError, match='nonboundary-endpoint'):
+        api().check_intervals(source, legacy=True)

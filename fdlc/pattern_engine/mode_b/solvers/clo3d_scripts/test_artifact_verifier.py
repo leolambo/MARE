@@ -238,7 +238,7 @@ def test_missing_file_private_failure(tmp_path):
     assert report["status"] == "invalid"
 
 
-def test_lengthparam_boundary_wrap_is_verified_conflict_free(tmp_path):
+def test_descending_representation_survives_existing_target_check(tmp_path):
     data = fixture()
     for side in data["SeamLinePairGroupList"][0]["PairList"][0].values():
         del side["LineID"]
@@ -312,8 +312,15 @@ def test_generator_synthetic_export_compatibility(tmp_path):
     for index, pattern in enumerate(data["PatternList"]):
         pattern["ID"] = "synthetic-" + str(index)
     export.write_text(json.dumps(data))
-    # Legacy descending ranges overlap under the explicit forward/wrap contract.
-    # Do not infer a different traversal from Direction or silently accept them.
+    # Source recipe recovery is separate from the unchanged target checker.
+    # Its forward/wrap assumption is not established CLO LengthParam semantics.
+    verifier = load('verify_artifacts')
+    original = json.loads(source.read_text())
+    assert verifier.validate(original, legacy=True)['physical_edges'] == 'passed'
+    corrected, coverage = verifier._geometry.correspond(original, data)
+    assert coverage['status'] == 'passed'
+    with pytest.raises(ValueError, match='physical-interval-overlap'):
+        verifier.validate(corrected)
     before = (source.read_bytes(), export.read_bytes())
     with pytest.raises(ValueError, match='physical-interval-overlap'):
         load("02_inject_seams").inject_seams(str(source), str(export), str(sewn))

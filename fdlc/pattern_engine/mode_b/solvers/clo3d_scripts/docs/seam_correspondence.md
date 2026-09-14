@@ -17,9 +17,10 @@ or staging operations. All geometry examples in tests are synthetic, not host ev
   It raises `CorrespondenceError`, a separate `ValueError` subclass; the verifier
   translates that class at its boundary, avoiding circular imports.
 - `check_intervals(data, legacy=False)` checks geometry and physical interval
-  reuse in a schema-validated document. `legacy=True` uses source generator length
-  weights when resolving LineID references mixed with fractions. Otherwise it uses
-  actual arc lengths. An unstaged artifact is interpreted in actual-length space.
+  reuse in a schema-validated document. `legacy=True` recovers generator recipe
+  occupancy after strict boundary snapping, including mixed LineID/fraction inputs.
+  Otherwise it retains the existing actual-length forward/wrap check; that check
+  is not established CLO semantics. An unstaged artifact uses this target mode.
 - The injector retains its three positional paths and callable signature. It
   serializes before exclusively creating the output (`open(..., 'x')`). Existing
   outputs, input aliases and symlinks cannot be overwritten. Inputs are immutable;
@@ -80,14 +81,18 @@ not recomputed from private artifacts, and do not establish support for any othe
 conversion topology. Report discrepancy statistics are computed from the actual
 supplied documents, never filled with those observation constants.
 
-## Interval and Direction contract
+## Source recipe recovery versus target representation
 
-LengthParam uses a **forward perimeter interval**: start < end is ordinary;
-start > end crosses the perimeter origin. Shared endpoints are allowed; any
-positive interval intersection on the same panel is rejected, independently of
-Direction, group or First/Second. Mixed LineID/fraction references are checked in
-one perimeter space. `[0,1]` is an explicit full perimeter; identical endpoints
-and `[1,0]` are rejected as empty/ambiguous.
+Known legacy generator recipes use section index boundaries, including descending
+ones: `_build_per_leg_seams` constructs a single section with boundaries `bi+1`
+and `bi`, and known waistband pairs also descend. After strict, unique snapping,
+source occupancy is `range(min(start_index, end_index), max(start_index, end_index))`.
+Indices `(2,1)` therefore consume exactly section 1, not the wrapping remainder.
+This recovers generator construction intent only; it does not infer CLO LengthParam
+traversal. Mixed LineID/fraction inputs use the same source section space.
+Shared endpoints are allowed; positive source occupancy overlap is rejected
+independently of Direction, group or First/Second. Existing rejection of identical
+endpoints and `[1,0]` remains; `[0,1]` remains the explicit full perimeter.
 
 First/Second ordering and every Direction boolean are preserved exactly.
 Direction=True is **not** an instruction to swap endpoints. For a geometrically
@@ -95,13 +100,18 @@ reversed export contour, the corrected interval bounds reverse to retain the
 same physical section coverage; this is driven only by geometry. No back-panel
 flips or new Direction values are inferred.
 
-This explicit forward/wrap contract does **not** guess that a descending legacy
-range meant a reverse traversal of the short non-wrapping interval. The current
-synthetic five-panel generator example is rejected for physical overlap under
-this contract rather than being treated as a successful import. Any partial
-waistband section endpoints would separately be unsupported by endpoint snapping.
-If another traversal convention is required, it needs an explicit, independently
-validated schema/intent contract before extending this layer.
+Occupancy recovery does not sort or swap the emitted endpoints. The mapper's
+existing endpoint representation, First/Second ordering and Direction handling
+are unchanged, including descending output on a direct export clone.
+
+The target validator is deliberately unchanged: ascending fractions use an
+ordinary interval and descending fractions are checked as forward wraparound.
+This is an implementation assumption, **not documented or observed CLO LengthParam
+semantics**. Thus source recovery and geometry correspondence can pass while
+`remap_seams` still rejects the corrected result during target validation. Such a
+rejection is not evidence that the source recipe overlaps or that CLO would reject
+it. Establish target semantics independently before changing that validator.
+Nonboundary source endpoints (including partial sections) remain unsupported.
 
 ## Reports and verification limits
 
