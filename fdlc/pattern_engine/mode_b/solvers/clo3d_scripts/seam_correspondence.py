@@ -132,6 +132,7 @@ def correspond(source, target):
             new.get('ID', new.get('ShapeID')), boundaries(lengths(src, legacy=True)), boundaries(lengths(dst)), matches)
     seams = copy.deepcopy(source['SeamLinePairGroupList'])
     occupied = {}
+    target_occupied = {}
     for group in seams:
         for pair in group['PairList']:
             for side in pair.values():
@@ -150,6 +151,11 @@ def correspond(source, target):
                 used = occupied.setdefault(ident, set())
                 require(not used.intersection(selected), 'physical-interval-overlap')
                 used.update(selected)
+                mapped = {matches[i][0] for i in selected}
+                target_used = target_occupied.setdefault(ident, set())
+                require(len(mapped) == len(selected) and not target_used.intersection(mapped),
+                        'physical-interval-overlap')
+                target_used.update(mapped)
                 first, reverse = matches[start % len(matches)]
                 last, _ = matches[(end-1) % len(matches)]
                 side['LengthParam'] = {'fStart': dst[last] if reverse else dst[first],
@@ -160,6 +166,9 @@ def correspond(source, target):
     result['SeamLinePairGroupList'] = seams
     return result, {
         'status': 'passed',
+        'physical_edges': 'passed',
+        'physical_edges_basis': 'correspondence-mapping',
+        'target_lengthparam_semantics': 'unknown',
         'counts': {'panels': len(mapping), 'sections': section_count, 'seam_sides': side_count},
         'coverage': {'matched_sections': section_count, 'sewn_sections': sum(map(len, occupied.values()))},
         'categories': categories,

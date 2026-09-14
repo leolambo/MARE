@@ -7,20 +7,27 @@ or staging operations. All geometry examples in tests are synthetic, not host ev
 
 - `verify_artifacts.remap_seams(source, target, *, with_report=False)` is the
   schema-validating API for parsed documents. It validates both inputs and the
-  output, returns a deep-copied sewn export, and optionally returns `(export, report)`.
+  output schema, source legacy physical recipe and geometry correspondence,
+  returns a deep-copied sewn export, and optionally returns `(export, report)`.
+  Non-seam export preservation is checked with type-sensitive canonical JSON.
   `InvalidArtifact` contains only a static category. Use `verify_artifacts.parse`
   for JSON decoding with duplicate-key rejection.
 - `seam_correspondence.correspond(source, target)` is the reusable geometry core:
   it returns `(export, report)` without file access. Its precondition is the
   verifier's artifact/seam schema validation. It independently checks panel
-  bijection, point geometry, correspondence, endpoint recovery and source coverage.
+  bijection, point geometry, correspondence, endpoint recovery and source coverage,
+  then maps occupied source section sets into target section sets without overlap.
   It raises `CorrespondenceError`, a separate `ValueError` subclass; the verifier
   translates that class at its boundary, avoiding circular imports.
 - `check_intervals(data, legacy=False)` checks geometry and physical interval
   reuse in a schema-validated document. `legacy=True` recovers generator recipe
   occupancy after strict boundary snapping, including mixed LineID/fraction inputs.
-  Otherwise it retains the existing actual-length forward/wrap check; that check
-  is not established CLO semantics. An unstaged artifact uses this target mode.
+  Otherwise it retains a historical actual-length forward/wrap diagnostic; that
+  check is not established CLO semantics and is not used by remapping or verification.
+- `validate_schema(data)` checks schema, IDs, references and fraction ranges only.
+  `validate(data, legacy=True)` additionally checks the known source physical recipe.
+  Default validation checks boundary geometry but reports physical edges unknown:
+  standalone target scalar LengthParam traversal semantics remain unresolved.
 - The injector retains its three positional paths and callable signature. It
   serializes before exclusively creating the output (`open(..., 'x')`). Existing
   outputs, input aliases and symlinks cannot be overwritten. Inputs are immutable;
@@ -104,13 +111,12 @@ Occupancy recovery does not sort or swap the emitted endpoints. The mapper's
 existing endpoint representation, First/Second ordering and Direction handling
 are unchanged, including descending output on a direct export clone.
 
-The target validator is deliberately unchanged: ascending fractions use an
-ordinary interval and descending fractions are checked as forward wraparound.
-This is an implementation assumption, **not documented or observed CLO LengthParam
-semantics**. Thus source recovery and geometry correspondence can pass while
-`remap_seams` still rejects the corrected result during target validation. Such a
-rejection is not evidence that the source recipe overlaps or that CLO would reject
-it. Establish target semantics independently before changing that validator.
+Target physical coverage passes **via correspondence mapping**, not scalar fraction
+traversal. Each occupied source section maps to exactly one target section under
+the already validated total bijection; mapped target occupancy must not overlap.
+The final remapped output receives schema/range checks and exact non-seam export
+preservation checks, never the generic target forward/wrap interval check.
+This does not establish standalone CLO LengthParam semantics or live acceptance.
 Nonboundary source endpoints (including partial sections) remain unsupported.
 
 ## Reports and verification limits
@@ -118,12 +124,22 @@ Nonboundary source endpoints (including partial sections) remain unsupported.
 Reports contain only digests, statuses, counts, tolerance values, discrepancy
 statistics, categories and coverage. No raw names, IDs, coordinates, paths or
 exception traces are emitted by the CLI. Coverage counts matched boundary sections
-and occupied source sections; it does not certify paired seam lengths, easing,
+and occupied source sections (in bijection with occupied target sections); it does not certify paired seam lengths, easing,
 orientation inside CLO, self-intersection, fabric, physical simulation or live
 project provenance. The core report has no file digest because it performs no I/O;
 the verifier adds byte SHA-256 digests (correlatable fingerprints, not anonymization).
 
 `checks.correspondence` contains independent panels-to-export and panels-to-sewn
-reports where those stages are supplied. A full `passed` offline report requires
-all stages, nonempty seams, interval clearance, corrected seam equality and exact
-type-sensitive non-seam export preservation. Missing stages remain incomplete.
+reports where those stages are supplied. Core reports explicitly include
+`physical_edges=passed`, `physical_edges_basis=correspondence-mapping`, and
+`target_lengthparam_semantics=unknown`. Export correspondence describes proposed
+mapped sewing, not the export's existing seams.
+
+A full `passed` offline report requires all stages, nonempty source seams, source
+and mapped target section clearance, corrected seam equality and exact type-sensitive
+non-seam export preservation. Only then is the sewn artifact's physical edge status
+promoted from `unknown` to `passed` via correspondence. The source's basis is
+`legacy-source-recipe`; the export's own physical edge status remains `unknown`.
+Unattached `artifact`, target-only data and partial chains never claim target physical
+edges passed. Missing stages remain incomplete, and mismatched sewn content is invalid.
+Target standalone scalar LengthParam semantics stay `unknown` even in a passed chain.

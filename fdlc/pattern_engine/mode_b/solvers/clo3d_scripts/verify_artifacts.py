@@ -61,7 +61,8 @@ def finite_tree(value):
             finite_tree(item)
 
 
-def validate(data, legacy=False):
+def validate_schema(data):
+    """Validate structure and references without interpreting scalar traversal."""
     require(isinstance(data, dict), "document-type")
     finite_tree(data)
     require(data.get("Unit") == "mm", "unsupported-unit")
@@ -164,28 +165,46 @@ def validate(data, legacy=False):
                     require(ref not in exact, "duplicate-reference")
                     exact.add(ref)
                 count += 1
-    try:
-        _geometry.check_intervals(data, legacy=legacy)
-    except _geometry.CorrespondenceError as exc:
-        raise InvalidArtifact(str(exc)) from None
     return {
         "names": names,
         "patterns": len(patterns),
         "seam_groups": len(groups),
         "seam_sides": count,
-        "physical_edges": "passed",
+        "physical_edges": "unknown",
+        "target_lengthparam_semantics": "unknown",
     }
 
 
+def validate(data, legacy=False):
+    info = validate_schema(data)
+    try:
+        if legacy:
+            _geometry.check_intervals(data, legacy=True)
+            info['physical_edges'] = 'passed'
+            info['physical_edges_basis'] = 'legacy-source-recipe'
+        else:
+            for pattern in data['PatternList']:
+                _geometry.points(pattern)
+    except _geometry.CorrespondenceError as exc:
+        raise InvalidArtifact(str(exc)) from None
+    return info
+
+
+def nonseam(data):
+    return {k: v for k, v in data.items() if k != 'SeamLinePairGroupList'}
+
+
 def remap_seams(source, target, *, with_report=False):
-    source_info, target_info = validate(source, legacy=True), validate(target)
+    source_info, target_info = validate(source, legacy=True), validate_schema(target)
     old, new = source_info["names"], target_info["names"]
     require(old.keys() == new.keys(), "name-set-mismatch")
     try:
         result, report = _geometry.correspond(source, target)
     except _geometry.CorrespondenceError as exc:
         raise InvalidArtifact(str(exc)) from None
-    validate(result)
+    validate_schema(result)
+    require(canonical(nonseam(result)) == canonical(nonseam(target)),
+            'export-preservation-mismatch')
     return (result, report) if with_report else result
 
 
@@ -235,20 +254,20 @@ def verify(paths):
                                 "seam-remap-mismatch",
                             )
             if "clo-export" in documents and "sewn" in documents:
-                strip = lambda d: {
-                    k: v for k, v in d.items() if k != "SeamLinePairGroupList"
-                }
                 require(
-                    canonical(strip(documents["clo-export"]))
-                    == canonical(strip(documents["sewn"])),
+                    canonical(nonseam(documents["clo-export"]))
+                    == canonical(nonseam(documents["sewn"])),
                     "export-preservation-mismatch",
                 )
             if not report["missing_stages"]:
+                # Promote only after expected sewn equality and export preservation.
+                report['artifacts']['sewn'].update(
+                    physical_edges='passed', physical_edges_basis='correspondence-mapping')
                 report["checks"]["roundtrip"] = "passed"
                 if (
                     all(
-                        a["physical_edges"] == "passed"
-                        for a in report["artifacts"].values()
+                        report['artifacts'][s]["physical_edges"] == "passed"
+                        for s in ('panels', 'sewn')
                     )
                     and report["artifacts"]["panels"]["seam_sides"] > 0
                 ):

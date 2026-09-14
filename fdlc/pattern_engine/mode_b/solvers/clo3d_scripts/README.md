@@ -70,9 +70,11 @@ agreement of the supplied stage files, not host provenance or successful import.
   List order is significant; whitespace/object-key order is not.
 - Supported units are mm. Supported seam sides are exactly ShapeID, Direction
   plus either LineID or LengthParam `{fStart,fEnd}`. Direction must be a JSON
-  boolean; fractions must be finite numbers in [0,1], not booleans. Descending
-  fractions use the explicit forward/wrap contract in the geometry API document;
-  no alternate legacy traversal is guessed. Duplicate JSON keys and all nonfinite numbers fail.
+  boolean; fractions must be finite numbers in [0,1], not booleans. Legacy source
+  recipes recover section occupancy by snapped index boundaries, including descending
+  endpoints. Target physical coverage passes only via correspondence mapping, not
+  generic forward/wrap scalar checks. Standalone target LengthParam semantics remain
+  unknown; Direction is not inferred. Duplicate JSON keys and all nonfinite numbers fail.
   Unknown seam group/pair/side structure is rejected rather than silently remapped.
   Optional group `Name` must be a string (empty labels remain supported),
   `bIsTurned` must be a JSON boolean, and present `FoldData` must be exactly
@@ -86,11 +88,15 @@ agreement of the supplied stage files, not host provenance or successful import.
   cannot satisfy LineID references. Shared endpoint IDs are intentionally not
   globally rejected. Point types, coordinates, closed boundaries and section
   correspondence are validated; missing PointList geometry fails closed.
-- LengthParam and LineID references across seam sides share physical interval
-  overlap checks. Shared endpoints are allowed. A side cannot contain both
+- Source LengthParam and LineID references across seam sides share physical section
+  overlap checks; their mapped target section sets must also be disjoint. Shared
+  endpoints are allowed. A side cannot contain both
   reference encodings. Source fraction endpoints must uniquely snap to generator
   boundary sections; interior endpoints and all subdivisions are unsupported.
-  See the geometry API document for tolerance scope and reversal/wrap limitations.
+  The result receives schema checks and exact non-seam export preservation checks.
+  Only a complete chain with correspondence-expected sewn equality promotes the
+  sewn artifact's physical edge status to passed; unattached/target-only artifacts
+  remain unknown. See the geometry API document for tolerance scope and limits.
 - No proof of CLO geometry equivalence across generation/export, correct seam
   orientation, fabric physics, arrangement, simulation, saved-project persistence,
   asset closure, or matching live project is supplied. Unique names are a mapping

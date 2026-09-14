@@ -238,7 +238,7 @@ def test_missing_file_private_failure(tmp_path):
     assert report["status"] == "invalid"
 
 
-def test_descending_representation_survives_existing_target_check(tmp_path):
+def test_descending_representation_verified_by_correspondence(tmp_path):
     data = fixture()
     for side in data["SeamLinePairGroupList"][0]["PairList"][0].values():
         del side["LineID"]
@@ -290,7 +290,7 @@ def test_unstaged_variant_and_empty_seams_not_full_success(tmp_path):
     assert report["status"] == "incomplete"
 
 
-def test_generator_synthetic_export_compatibility(tmp_path):
+def test_generator_synthetic_export_compatibility(tmp_path, monkeypatch):
     from fdlc.pattern_engine.mode_b.solvers.clo3d_json import generate_5panel_json
 
     source = tmp_path / "panels.json"
@@ -312,20 +312,58 @@ def test_generator_synthetic_export_compatibility(tmp_path):
     for index, pattern in enumerate(data["PatternList"]):
         pattern["ID"] = "synthetic-" + str(index)
     export.write_text(json.dumps(data))
-    # Source recipe recovery is separate from the unchanged target checker.
-    # Its forward/wrap assumption is not established CLO LengthParam semantics.
     verifier = load('verify_artifacts')
     original = json.loads(source.read_text())
     assert verifier.validate(original, legacy=True)['physical_edges'] == 'passed'
     corrected, coverage = verifier._geometry.correspond(original, data)
     assert coverage['status'] == 'passed'
-    with pytest.raises(ValueError, match='physical-interval-overlap'):
-        verifier.validate(corrected)
+    assert coverage['counts'] == {'panels': 6, 'sections': 52, 'seam_sides': 40}
+    assert coverage['coverage'] == {'matched_sections': 52, 'sewn_sections': 46}
+    assert any(side['LengthParam']['fStart'] > side['LengthParam']['fEnd']
+               for group in corrected['SeamLinePairGroupList']
+               for pair in group['PairList'] for side in pair.values())
+    before_objects = copy.deepcopy((original, data))
+    check_intervals = verifier._geometry.check_intervals
+    def source_check_only(document, legacy=False):
+        assert legacy is True, 'generic target scalar traversal must not be invoked'
+        return check_intervals(document, legacy=True)
+    monkeypatch.setattr(verifier._geometry, 'check_intervals', source_check_only)
+    result, report = verifier.remap_seams(original, data, with_report=True)
+    assert result == corrected
+    assert report == coverage
+    assert report['physical_edges'] == 'passed'
+    assert report['physical_edges_basis'] == 'correspondence-mapping'
+    assert report['target_lengthparam_semantics'] == 'unknown'
+    assert (original, data) == before_objects
     before = (source.read_bytes(), export.read_bytes())
-    with pytest.raises(ValueError, match='physical-interval-overlap'):
-        load("02_inject_seams").inject_seams(str(source), str(export), str(sewn))
-    assert not sewn.exists()
+    injector = load('02_inject_seams')
+    monkeypatch.setattr(injector._verifier._geometry, 'check_intervals', source_check_only)
+    injector.inject_seams(str(source), str(export), str(sewn))
+    assert json.loads(sewn.read_text()) == corrected
+    full = verifier.verify({'panels': source, 'clo-export': export, 'sewn': sewn})
+    assert full['status'] == 'passed'
+    assert full['checks']['correspondence']['sewn'] == coverage
+    assert full['artifacts']['sewn']['physical_edges'] == 'passed'
+    assert full['artifacts']['clo-export']['physical_edges'] == 'unknown'
+    assert full['artifacts']['sewn']['target_lengthparam_semantics'] == 'unknown'
+    with pytest.raises(FileExistsError):
+        injector.inject_seams(str(source), str(export), str(sewn))
     assert (source.read_bytes(), export.read_bytes()) == before
+    overlapping = copy.deepcopy(original)
+    extra = copy.deepcopy(overlapping['SeamLinePairGroupList'][0])
+    for pair in extra['PairList']:
+        for side in pair.values():
+            side['Direction'] = not side['Direction']
+    overlapping['SeamLinePairGroupList'].append(extra)
+    with pytest.raises(ValueError, match='physical-interval-overlap'):
+        verifier.remap_seams(overlapping, data)
+    tampered = copy.deepcopy(corrected)
+    tampered['SeamLinePairGroupList'][0]['PairList'][0]['First']['Direction'] = not (
+        tampered['SeamLinePairGroupList'][0]['PairList'][0]['First']['Direction'])
+    sewn.write_text(json.dumps(tampered))
+    rejected = verifier.verify({'panels': source, 'clo-export': export, 'sewn': sewn})
+    assert rejected['errors'] == [{'stage': 'cross-stage', 'code': 'seam-remap-mismatch'}]
+    assert rejected['artifacts']['sewn']['physical_edges'] == 'unknown'
 
 def test_missing_geometry_cannot_use_shape_id_only_bypass(tmp_path):
     data = fixture()
@@ -347,10 +385,20 @@ def test_unstaged_mixed_line_and_fraction_physical_intervals(tmp_path, overlap):
     path = tmp_path / 'artifact.json'
     path.write_text(json.dumps(data))
     report = load('verify_artifacts').verify({'artifact': path})
-    if overlap:
-        assert report['errors'] == [{'stage': 'artifact', 'code': 'physical-interval-overlap'}]
-    else:
-        assert report['artifacts']['artifact']['physical_edges'] == 'passed'
+    assert report['status'] == 'incomplete'
+    assert report['artifacts']['artifact']['physical_edges'] == 'unknown'
+    assert report['artifacts']['artifact']['target_lengthparam_semantics'] == 'unknown'
+
+
+@pytest.mark.parametrize('stages', [('artifact',), ('sewn',), ('clo-export', 'sewn')])
+def test_unattached_target_cannot_claim_physical_coverage(tmp_path, stages):
+    paths = files(tmp_path)
+    load('02_inject_seams').inject_seams(*map(str, paths))
+    verifier = load('verify_artifacts')
+    report = verifier.verify({stage: paths[2] for stage in stages})
+    assert report['status'] == 'incomplete'
+    assert all(item['physical_edges'] == 'unknown' for item in report['artifacts'].values())
+    assert verifier.validate(json.loads(paths[2].read_text()))['physical_edges'] == 'unknown'
 
 
 @pytest.mark.parametrize("value", ["not a boolean", 0, 1, None, [], {}])
