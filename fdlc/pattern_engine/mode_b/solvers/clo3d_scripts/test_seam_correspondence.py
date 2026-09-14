@@ -50,6 +50,20 @@ def test_direct_straight_preserves_order_direction_and_export():
     assert (source, target) == before
     assert report['status'] == 'passed'
 
+
+def test_direct_closure_boundary_preserves_seam_interval_representation():
+    """The geometric closure point is cyclic, but 1.0 and 0.0 are not interchangeable seam syntax."""
+    source = document()
+    for side in source['SeamLinePairGroupList'][0]['PairList'][0].values():
+        side['LengthParam'] = {'fStart': 1.0, 'fEnd': .75}
+        side['Direction'] = False
+
+    result, _ = api().correspond(source, export_of(source))
+
+    for side in result['SeamLinePairGroupList'][0]['PairList'][0].values():
+        assert side['LengthParam'] == {'fStart': 1.0, 'fEnd': .75}
+        assert side['Direction'] is False
+
 def test_line_id_resolves_geometry_when_export_line_ids_change():
     source = document()
     for side in source['SeamLinePairGroupList'][0]['PairList'][0].values():

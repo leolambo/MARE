@@ -107,13 +107,19 @@ reversed export contour, the corrected interval bounds reverse to retain the
 same physical section coverage; this is driven only by geometry. No back-panel
 flips or new Direction values are inferred.
 
-Occupancy recovery does not sort or swap the emitted endpoints. The mapper's
-existing endpoint representation, First/Second ordering and Direction handling
-are unchanged, including descending output on a direct export clone.
+Occupancy recovery does not sort or swap the emitted endpoints. On a direct,
+unreordered contour, a source final-boundary start is serialized as `1.0`, not
+modulo-normalized to `0.0`: those coordinates identify the same closure point,
+but are distinct seam-interval representations. First/Second ordering and
+Direction are otherwise unchanged. Reordered and reversed contours retain their
+existing mapped-boundary behavior until host evidence establishes their endpoint
+syntax.
 
 Target physical coverage passes **via correspondence mapping**, not scalar fraction
 traversal. Each occupied source section maps to exactly one target section under
 the already validated total bijection; mapped target occupancy must not overlap.
+This proves intended source-section ownership, not the interval ownership CLO
+will consume from serialized `LengthParam` values.
 The final remapped output receives schema/range checks and exact non-seam export
 preservation checks, never the generic target forward/wrap interval check.
 This does not establish standalone CLO LengthParam semantics or live acceptance.
@@ -133,12 +139,14 @@ the verifier adds byte SHA-256 digests (correlatable fingerprints, not anonymiza
 reports where those stages are supplied. Core reports explicitly include
 `physical_edges=passed`, `physical_edges_basis=correspondence-mapping`, and
 `target_lengthparam_semantics=unknown`. Export correspondence describes proposed
-mapped sewing, not the export's existing seams.
+mapped sewing, not the export's existing seams. In particular, a passed mapping
+does not prove host-consumed interval ownership or rule out host-side overlap.
 
 A full `passed` offline report requires all stages, nonempty source seams, source
 and mapped target section clearance, corrected seam equality and exact type-sensitive
 non-seam export preservation. Only then is the sewn artifact's physical edge status
-promoted from `unknown` to `passed` via correspondence. The source's basis is
+promoted from `unknown` to `passed` via correspondence; this is intended-section
+ownership rather than host-consumed interval ownership. The source's basis is
 `legacy-source-recipe`; the export's own physical edge status remains `unknown`.
 Unattached `artifact`, target-only data and partial chains never claim target physical
 edges passed. Missing stages remain incomplete, and mismatched sewn content is invalid.

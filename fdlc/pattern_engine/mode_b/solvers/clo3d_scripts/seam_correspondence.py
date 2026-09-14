@@ -129,7 +129,8 @@ def correspond(source, target):
             for i, edge in enumerate(old['ShapeInfo']['LineList'])
             if 'ID' in edge or 'ShapeID' in edge}
         mapping[old.get('ID', old.get('ShapeID'))] = (
-            new.get('ID', new.get('ShapeID')), boundaries(lengths(src, legacy=True)), boundaries(lengths(dst)), matches)
+            new.get('ID', new.get('ShapeID')), boundaries(lengths(src, legacy=True)), boundaries(lengths(dst)), matches,
+            all(index == target_index and not reverse for index, (target_index, reverse) in enumerate(matches)))
     seams = copy.deepcopy(source['SeamLinePairGroupList'])
     occupied = {}
     target_occupied = {}
@@ -137,7 +138,7 @@ def correspond(source, target):
         for pair in group['PairList']:
             for side in pair.values():
                 side_count += 1
-                ident, src, dst, matches = mapping[side['ShapeID']]
+                ident, src, dst, matches, direct_contour = mapping[side['ShapeID']]
                 if 'LineID' in side:
                     start = line_indices[side['ShapeID']][side.pop('LineID')]
                     end = start + 1
@@ -156,7 +157,13 @@ def correspond(source, target):
                 require(len(mapped) == len(selected) and not target_used.intersection(mapped),
                         'physical-interval-overlap')
                 target_used.update(mapped)
+                # The closure point is geometrically equal at 0 and 1, but the
+                # serialized endpoint is seam-interval syntax. Preserve a source
+                # final-boundary start on an unchanged contour rather than modulo
+                # normalizing it to 0.
                 first, reverse = matches[start % len(matches)]
+                if direct_contour and start == len(matches):
+                    first = len(matches)
                 last, _ = matches[(end-1) % len(matches)]
                 side['LengthParam'] = {'fStart': dst[last] if reverse else dst[first],
                                        'fEnd': dst[first+1] if reverse else dst[last+1]}
