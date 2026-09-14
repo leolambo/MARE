@@ -24,7 +24,15 @@ def fixture():
     return {
         "Unit": "mm",
         "PatternList": [
-            {"Name": name, "ID": ident, "ShapeInfo": {"LineList": [{"ID": "edge"}]}}
+            {"Name": name, "ID": ident, "ShapeInfo": {"LineList": [
+                {"ID": lid, "PointList": [
+                    {"PointType": 0, "Position": {"x": x, "y": y}}
+                    for x, y in ends]}
+                for lid, ends in [
+                    ("edge", [(0, 0), (10, 0)]),
+                    ("right", [(10, 0), (10, 10)]),
+                    ("top", [(10, 10), (0, 10)]),
+                    ("left", [(0, 10), (0, 0)])]]}}
             for name, ident in [("front", "a"), ("back", "b")]
         ],
         "SeamLinePairGroupList": [
@@ -230,19 +238,19 @@ def test_missing_file_private_failure(tmp_path):
     assert report["status"] == "invalid"
 
 
-def test_lengthparam_complete_is_not_conflict_free(tmp_path):
+def test_lengthparam_boundary_wrap_is_verified_conflict_free(tmp_path):
     data = fixture()
     for side in data["SeamLinePairGroupList"][0]["PairList"][0].values():
         del side["LineID"]
-        side["LengthParam"] = {"fStart": 0.8, "fEnd": 0.2}
+        side["LengthParam"] = {"fStart": 0.75, "fEnd": 0.25}
     paths = files(tmp_path, data)
     load("02_inject_seams").inject_seams(*map(str, paths))
     report = load("verify_artifacts").verify(
         dict(zip(["panels", "clo-export", "sewn"], paths))
     )
-    assert report["status"] == "incomplete"
+    assert report["status"] == "passed"
     assert report["checks"]["roundtrip"] == "passed"
-    assert report["artifacts"]["sewn"]["physical_edges"] == "unknown"
+    assert report["artifacts"]["sewn"]["physical_edges"] == "passed"
 
 
 @pytest.mark.parametrize(
@@ -304,14 +312,38 @@ def test_generator_synthetic_export_compatibility(tmp_path):
     for index, pattern in enumerate(data["PatternList"]):
         pattern["ID"] = "synthetic-" + str(index)
     export.write_text(json.dumps(data))
-    load("02_inject_seams").inject_seams(str(source), str(export), str(sewn))
-    report = load("verify_artifacts").verify(
-        {"panels": source, "clo-export": export, "sewn": sewn}
-    )
-    assert report["errors"] == []
-    assert report["checks"]["roundtrip"] == "passed"
-    assert report["status"] == "incomplete"
-    assert report["artifacts"]["sewn"]["seam_groups"] == 20
+    # Legacy descending ranges overlap under the explicit forward/wrap contract.
+    # Do not infer a different traversal from Direction or silently accept them.
+    before = (source.read_bytes(), export.read_bytes())
+    with pytest.raises(ValueError, match='physical-interval-overlap'):
+        load("02_inject_seams").inject_seams(str(source), str(export), str(sewn))
+    assert not sewn.exists()
+    assert (source.read_bytes(), export.read_bytes()) == before
+
+def test_missing_geometry_cannot_use_shape_id_only_bypass(tmp_path):
+    data = fixture()
+    del data['PatternList'][0]['ShapeInfo']['LineList'][0]['PointList']
+    paths = files(tmp_path, data)
+    with pytest.raises(ValueError, match='geometry-schema'):
+        load('02_inject_seams').inject_seams(*map(str, paths))
+    assert not paths[2].exists()
+
+@pytest.mark.parametrize('overlap', [False, True])
+def test_unstaged_mixed_line_and_fraction_physical_intervals(tmp_path, overlap):
+    data = fixture()
+    pair = copy.deepcopy(data['SeamLinePairGroupList'][0]['PairList'][0])
+    for side in pair.values():
+        del side['LineID']
+        side['LengthParam'] = {'fStart': .125 if overlap else .25, 'fEnd': .5}
+        side['Direction'] = True
+    data['SeamLinePairGroupList'][0]['PairList'].append(pair)
+    path = tmp_path / 'artifact.json'
+    path.write_text(json.dumps(data))
+    report = load('verify_artifacts').verify({'artifact': path})
+    if overlap:
+        assert report['errors'] == [{'stage': 'artifact', 'code': 'physical-interval-overlap'}]
+    else:
+        assert report['artifacts']['artifact']['physical_edges'] == 'passed'
 
 
 @pytest.mark.parametrize("value", ["not a boolean", 0, 1, None, [], {}])
@@ -418,3 +450,21 @@ def test_export_preservation_is_type_sensitive(tmp_path):
         dict(zip(["panels", "clo-export", "sewn"], paths))
     )
     assert report["status"] == "invalid"
+
+def test_cubic_injection_and_verification_share_geometry_report(tmp_path):
+    data = fixture()
+    for p in data['PatternList']:
+        p['ShapeInfo']['LineList'][0]['PointList'] = [
+            {'PointType': t, 'Position': {'x': x, 'y': y}}
+            for t, x, y in [(0, 0, 0), (3, 0, -10), (3, 10, -10), (0, 10, 0)]]
+    for side in data['SeamLinePairGroupList'][0]['PairList'][0].values():
+        del side['LineID']
+        side['LengthParam'] = {'fStart': 0, 'fEnd': 34.5 / 64.5}
+    paths = files(tmp_path, data)
+    load('02_inject_seams').inject_seams(*map(str, paths))
+    sewn = json.loads(paths[2].read_text())
+    assert sewn['SeamLinePairGroupList'][0]['PairList'][0]['First']['LengthParam']['fEnd'] == pytest.approx(.4, abs=1e-10)
+    report = load('verify_artifacts').verify(dict(zip(['panels', 'clo-export', 'sewn'], paths)))
+    assert report['status'] == 'passed'
+    assert report['checks']['correspondence']['clo-export']['coverage']['matched_sections'] == 8
+    assert report['checks']['correspondence']['sewn']['counts']['seam_sides'] == 2

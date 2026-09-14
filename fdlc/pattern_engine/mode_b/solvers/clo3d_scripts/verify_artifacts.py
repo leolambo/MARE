@@ -1,11 +1,17 @@
 """Read-only, privacy-projected offline CLO artifact checks (stdlib only)."""
 
 import argparse
-import copy
+import importlib.util
 import hashlib
 import json
 import math
 from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    'mare_seam_correspondence', Path(__file__).with_name('seam_correspondence.py'))
+assert _spec is not None and _spec.loader is not None
+_geometry = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_geometry)
 
 
 class InvalidArtifact(ValueError):
@@ -55,7 +61,7 @@ def finite_tree(value):
             finite_tree(item)
 
 
-def validate(data):
+def validate(data, legacy=False):
     require(isinstance(data, dict), "document-type")
     finite_tree(data)
     require(data.get("Unit") == "mm", "unsupported-unit")
@@ -87,7 +93,7 @@ def validate(data):
     groups = data.get("SeamLinePairGroupList")
     require(isinstance(groups, list), "seam-list")
     used, exact = set(), set()
-    unknown = False
+
     count = 0
     for group in groups:
         require(isinstance(group, dict), "group-type")
@@ -135,7 +141,7 @@ def validate(data):
                     require(edge not in used, "physical-edge-reuse")
                     used.add(edge)
                 else:
-                    unknown = True
+
                     fractions = side["LengthParam"]
                     require(
                         isinstance(fractions, dict)
@@ -158,29 +164,29 @@ def validate(data):
                     require(ref not in exact, "duplicate-reference")
                     exact.add(ref)
                 count += 1
+    try:
+        _geometry.check_intervals(data, legacy=legacy)
+    except _geometry.CorrespondenceError as exc:
+        raise InvalidArtifact(str(exc)) from None
     return {
         "names": names,
         "patterns": len(patterns),
         "seam_groups": len(groups),
         "seam_sides": count,
-        "physical_edges": "unknown" if unknown else "passed",
+        "physical_edges": "passed",
     }
 
 
-def remap_seams(source, target):
-    source_info, target_info = validate(source), validate(target)
+def remap_seams(source, target, *, with_report=False):
+    source_info, target_info = validate(source, legacy=True), validate(target)
     old, new = source_info["names"], target_info["names"]
     require(old.keys() == new.keys(), "name-set-mismatch")
-    mapping = {ident: new[name] for name, ident in old.items()}
-    seams = copy.deepcopy(source["SeamLinePairGroupList"])
-    for group in seams:
-        for pair in group["PairList"]:
-            for side in pair.values():
-                side["ShapeID"] = mapping[side["ShapeID"]]
-    result = copy.deepcopy(target)
-    result["SeamLinePairGroupList"] = seams
+    try:
+        result, report = _geometry.correspond(source, target)
+    except _geometry.CorrespondenceError as exc:
+        raise InvalidArtifact(str(exc)) from None
     validate(result)
-    return result
+    return (result, report) if with_report else result
 
 
 def canonical(data):
@@ -203,7 +209,7 @@ def verify(paths):
             raw = Path(path).read_bytes()
             report["artifacts"][stage] = {"sha256": hashlib.sha256(raw).hexdigest()}
             data = parse(raw)
-            info = validate(data)
+            info = validate(data, legacy=stage == 'panels')
             documents[stage] = data
             report["artifacts"][stage].update(
                 {k: v for k, v in info.items() if k != "names"}
@@ -214,14 +220,15 @@ def verify(paths):
             report["errors"].append({"stage": stage, "code": "unreadable-or-too-deep"})
     if not report["errors"]:
         try:
-            infos = [validate(d)["names"] for d in documents.values()]
+            infos = [validate(d, legacy=s == 'panels')["names"] for s, d in documents.items()]
             require(
                 all(i.keys() == infos[0].keys() for i in infos), "name-set-mismatch"
             )
             if "panels" in documents:
                 for target in ("clo-export", "sewn"):
                     if target in documents:
-                        expected = remap_seams(documents["panels"], documents[target])
+                        expected, coverage = remap_seams(documents["panels"], documents[target], with_report=True)
+                        report['checks'].setdefault('correspondence', {})[target] = coverage
                         if target == "sewn":
                             require(
                                 canonical(expected) == canonical(documents[target]),

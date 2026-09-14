@@ -27,7 +27,9 @@ Scripts for the CLO3D 3D simulation workflow. CLO3D ignores seams from freshly g
 
 ## Offline artifact verification (no CLO or MCP access)
 
-Keep `verify_artifacts.py` beside `02_inject_seams.py`. Both use only Python's
+Keep `seam_correspondence.py` and `verify_artifacts.py` beside `02_inject_seams.py`.
+See [offline geometry API and limitations](docs/seam_correspondence.md).
+All three use only Python's
 standard library; the injector's positional arguments and callable interface are
 unchanged. The output must now be **new**: existing files, input aliases, and
 symlinks are refused by exclusive creation. Choose a versioned output rather than
@@ -50,7 +52,7 @@ printed. Fingerprints permit correlation and are **not anonymization**. Redirect
 is optional and performed by your shell, not by the read-only verifier.
 
 Exit status: **0** all implemented offline checks passed with all three stages and
-nonempty, resolvable whole-line seams; **1** invalid/unreadable artifact or stage
+nonempty, geometry-resolvable boundary seams; **1** invalid/unreadable artifact or stage
 mismatch; **2** incomplete/unknown (also argparse usage errors). An incomplete
 report can have no errors. `checks.roundtrip=passed` means only structural
 agreement of the supplied stage files, not host provenance or successful import.
@@ -60,14 +62,17 @@ agreement of the supplied stage files, not host provenance or successful import.
 - Pattern names and string IDs must be nonempty and unique; ID/ShapeID aliases
   must agree if both exist. Names match exactly, with no trimming or case folding.
   All present stages must have identical name sets, establishing a total bijection.
-- Remapping only changes `PairList[].First/Second.ShapeID`, once, without chained
-  replacements or altering seam names/metadata. Source-to-sewn seams and
+- Remapping resolves `PairList[].First/Second.ShapeID` and recomputes LengthParam
+  from matched exported section arc lengths (LineID inputs become LengthParam).
+  First/Second order, Direction and seam names/metadata remain unchanged.
+  Source-to-sewn seams and
   export-to-sewn non-seam content are compared with type-sensitive canonical JSON.
   List order is significant; whitespace/object-key order is not.
 - Supported units are mm. Supported seam sides are exactly ShapeID, Direction
   plus either LineID or LengthParam `{fStart,fEnd}`. Direction must be a JSON
   boolean; fractions must be finite numbers in [0,1], not booleans. Descending
-  fractions are accepted. Duplicate JSON keys and all nonfinite numbers fail.
+  fractions use the explicit forward/wrap contract in the geometry API document;
+  no alternate legacy traversal is guessed. Duplicate JSON keys and all nonfinite numbers fail.
   Unknown seam group/pair/side structure is rejected rather than silently remapped.
   Optional group `Name` must be a string (empty labels remain supported),
   `bIsTurned` must be a JSON boolean, and present `FoldData` must be exactly
@@ -79,12 +84,13 @@ agreement of the supplied stage files, not host provenance or successful import.
   physical line** is a conflict regardless of Direction or group. Present outline
   IDs must be unique per panel. Generator waistband lines can omit IDs; these
   cannot satisfy LineID references. Shared endpoint IDs are intentionally not
-  globally rejected, and point/curve geometry is not otherwise validated.
-- LengthParam-only records get exact repeated-reference checks, **not physical
-  overlap clearance**. Perimeter wrap/direction/edge correspondence semantics are
-  not established here; even a complete valid LengthParam bundle stays incomplete.
-  Mixed LineID+LengthParam and unrecognized partial-line encodings fail schema
-  validation; no interval interpretation is invented.
+  globally rejected. Point types, coordinates, closed boundaries and section
+  correspondence are validated; missing PointList geometry fails closed.
+- LengthParam and LineID references across seam sides share physical interval
+  overlap checks. Shared endpoints are allowed. A side cannot contain both
+  reference encodings. Source fraction endpoints must uniquely snap to generator
+  boundary sections; interior endpoints and all subdivisions are unsupported.
+  See the geometry API document for tolerance scope and reversal/wrap limitations.
 - No proof of CLO geometry equivalence across generation/export, correct seam
   orientation, fabric physics, arrangement, simulation, saved-project persistence,
   asset closure, or matching live project is supplied. Unique names are a mapping

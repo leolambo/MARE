@@ -19,7 +19,7 @@ _spec.loader.exec_module(_verifier)
 
 
 def inject_seams(panels_path: str, export_path: str, output_path: str) -> str:
-    """Validate and copy the export, changing only exact seam ShapeID values."""
+    """Copy the export with geometry-resolved IDs and corrected seam fractions."""
     with open(panels_path) as stream:
         source = _verifier.parse(stream.read())
     with open(export_path) as stream:
