@@ -112,6 +112,7 @@ def correspond(source, target):
     require(old_names.keys() == by_name.keys(), 'name-set-mismatch')
     mapping = {}
     line_indices = {}
+    target_line_ids = {}
     categories = {'direct': 0, 'reordered': 0, 'reversed': 0}
     discrepancies = []
     section_count = side_count = 0
@@ -128,6 +129,10 @@ def correspond(source, target):
             edge.get('ID', edge.get('ShapeID')): i
             for i, edge in enumerate(old['ShapeInfo']['LineList'])
             if 'ID' in edge or 'ShapeID' in edge}
+        target_line_ids[old.get('ID', old.get('ShapeID'))] = {
+            i: edge.get('ID', edge.get('ShapeID'))
+            for i, edge in enumerate(new['ShapeInfo']['LineList'])
+            if 'ID' in edge or 'ShapeID' in edge}
         mapping[old.get('ID', old.get('ShapeID'))] = (
             new.get('ID', new.get('ShapeID')), boundaries(lengths(src, legacy=True)), boundaries(lengths(dst)), matches,
             all(index == target_index and not reverse for index, (target_index, reverse) in enumerate(matches)))
@@ -138,9 +143,10 @@ def correspond(source, target):
         for pair in group['PairList']:
             for side in pair.values():
                 side_count += 1
-                ident, src, dst, matches, direct_contour = mapping[side['ShapeID']]
+                source_ident = side['ShapeID']
+                ident, src, dst, matches, direct_contour = mapping[source_ident]
                 if 'LineID' in side:
-                    start = line_indices[side['ShapeID']][side.pop('LineID')]
+                    start = line_indices[source_ident][side.pop('LineID')]
                     end = start + 1
                 else:
                     start, end = [snap(side['LengthParam'][key], src)
@@ -157,6 +163,14 @@ def correspond(source, target):
                 require(len(mapped) == len(selected) and not target_used.intersection(mapped),
                         'physical-interval-overlap')
                 target_used.update(mapped)
+                # Current CLO host exports retain a target LineID alongside
+                # LengthParam for a one-section side. Preserve the resolved
+                # target reference only where it is exact; multi-section spans
+                # remain LengthParam-only until host semantics are established.
+                if len(mapped) == 1:
+                    target_index = next(iter(mapped))
+                    if target_index in target_line_ids[source_ident]:
+                        side['LineID'] = target_line_ids[source_ident][target_index]
                 # The closure point is geometrically equal at 0 and 1, but the
                 # serialized endpoint is seam-interval syntax. Preserve a source
                 # final-boundary start on an unchanged contour rather than modulo

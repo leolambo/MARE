@@ -44,7 +44,7 @@ def test_direct_straight_preserves_order_direction_and_export():
     result, report = api().correspond(source, target)
     pair = result['SeamLinePairGroupList'][0]['PairList'][0]
     assert list(pair) == ['First', 'Second']
-    assert pair['First'] == {'ShapeID': 'a-export', 'LengthParam': {'fStart': 0, 'fEnd': .25}, 'Direction': True}
+    assert pair['First'] == {'ShapeID': 'a-export', 'LineID': '0', 'LengthParam': {'fStart': 0, 'fEnd': .25}, 'Direction': True}
     assert pair['Second']['ShapeID'] == 'b-export'
     assert {k: v for k, v in result.items() if k != 'SeamLinePairGroupList'} == {k: v for k, v in target.items() if k != 'SeamLinePairGroupList'}
     assert (source, target) == before
@@ -75,7 +75,7 @@ def test_line_id_resolves_geometry_when_export_line_ids_change():
             edge['ID'] += '-new'
     result, _ = api().correspond(source, target)
     side = result['SeamLinePairGroupList'][0]['PairList'][0]['First']
-    assert 'LineID' not in side
+    assert side['LineID'] == '0-new'
     assert side['LengthParam'] == {'fStart': 0, 'fEnd': .25}
 
 def test_cubic_uses_arc_length_not_generator_control_polygon_factor():
@@ -319,7 +319,9 @@ def test_multiple_descending_legacy_sections_map_without_swapping(direction):
     for pair, original in zip(result['SeamLinePairGroupList'][0]['PairList'], pairs):
         assert list(pair) == ['First', 'Second']
         for key in pair:
-            assert pair[key] == {**original[key], 'ShapeID': original[key]['ShapeID'] + '-export'}
+            expected = {**original[key], 'ShapeID': original[key]['ShapeID'] + '-export'}
+            expected['LineID'] = str(int(min(original[key]['LengthParam'].values()) * 4))
+            assert pair[key] == expected
             assert pair[key]['LengthParam']['fStart'] > pair[key]['LengthParam']['fEnd']
             assert pair[key]['Direction'] is direction
     assert source == before
