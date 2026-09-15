@@ -86,19 +86,19 @@ def bind_geometry(exported, live):
 
 
 def bind_fixed(source, exported, live, group):
-    """Only the understood side-top / adjacent hip-knee endpoint pairing.
+    """Only the three canonical left-side sections: top, hip-knee, knee-hem.
 
     Both source sections pair their starts together and ends together. The retained
     generated orientation fixture represents that same forward/forward traversal using
     reversed LengthParam + opposite Direction on one side. Do not copy its JSON
     booleans into the native API: SDK true means forward along the observed line.
     """
-    geo.require(type(group) is int and group in (0, 1), 'unsupported-native-group')
+    geo.require(type(group) is int and group in (0, 1, 2), 'unsupported-native-group')
     mapping = bind_geometry(exported, live)
     geo.require(len(mapping) == 6, 'native-benchmark-pattern-count')
     report = whole_line_recipe.analyze(source, exported)
     selected = report['groups'][group]
-    geo.require(selected['name'] == ('side_top_L', 'side_hip_knee_L')[group]
+    geo.require(selected['name'] == ('side_top_L', 'side_hip_knee_L', 'side_knee_hem_L')[group]
                 and len(selected['sides']) == 2, 'native-fixed-recipe')
     refs = []
     for side, name in zip(selected['sides'], ('Back_Left', 'Front_Left')):
@@ -122,7 +122,7 @@ def verify_fixed_result(source, before, after, count, live=None):
     run provenance itself. Missing witnesses and unknown representations fail
     closed. Native lengths are ordered by geometry correspondence, not indices.
     """
-    geo.require(type(count) is int and count in (1, 2), 'native-result-count')
+    geo.require(type(count) is int and count in (1, 2, 3), 'native-result-count')
     old, new = geo.panel_index(before), geo.panel_index(after)
     geo.require(old.keys() == new.keys(), 'native-result-panels')
     for name in old:

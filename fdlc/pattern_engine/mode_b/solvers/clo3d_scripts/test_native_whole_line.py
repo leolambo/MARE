@@ -26,6 +26,40 @@ def capture(target):
 
 
 class NativeBindingTests(unittest.TestCase):
+    def test_group2_binds_whole_section_with_native_reversal(self):
+        source, target = fixture()
+        first = source['SeamLinePairGroupList'][0]
+        source['SeamLinePairGroupList'] = []
+        for i, name in enumerate(('side_top_L', 'side_hip_knee_L', 'side_knee_hem_L')):
+            group = copy.deepcopy(first); group['Name'] = name
+            for side in group['PairList'][0].values():
+                side['LengthParam'] = {'fStart': (i+1)/4, 'fEnd': (i+2)/4}
+            source['SeamLinePairGroupList'].append(group)
+        for document in (source, target):
+            for name in ('Front_Right', 'Back_Right', 'WB_Front', 'WB_Back'):
+                p = copy.deepcopy(document['PatternList'][0]); p['Name'] = p['ID'] = name
+                document['PatternList'].append(p)
+        live = capture(target)
+        row = live['patterns'][0]; info = json.loads(row['pattern_line_info_json'])
+        for line in info['lines']:
+            line['start'], line['end'] = line['end'], line['start']
+        row['pattern_line_info_json'] = json.dumps(info)
+        self.assertEqual(native.bind_fixed(source, target, live, 2),
+            dict(pattern_a=1, line_a=11, pattern_b=0, line_b=11,
+                 direction_a=True, direction_b=False))
+        sewn, _ = geo.correspond(source, target)
+        for group in sewn['SeamLinePairGroupList']:
+            for side in group['PairList'][0].values(): side['Direction'] = True
+        native.verify_fixed_result(source, target, sewn, 3, live)
+        for index in range(3):
+            bad = copy.deepcopy(sewn)
+            bad['SeamLinePairGroupList'][index]['PairList'][0]['First']['Direction'] = False
+            with self.assertRaisesRegex(ValueError, 'native-result-pairing-or-direction'):
+                native.verify_fixed_result(source, target, bad, 3, live)
+        for invalid in (-1, 3, True):
+            with self.assertRaisesRegex(ValueError, 'unsupported-native-group'):
+                native.bind_fixed(source, target, live, invalid)
+
     def test_native_line_indices_are_geometry_matched_not_ordinals(self):
         self.assertIsNotNone(native, 'native binder missing')
         source, target = fixture()
@@ -44,7 +78,7 @@ class NativeBindingTests(unittest.TestCase):
         result = native.bind_fixed(source, target, capture(target), 0)
         self.assertEqual(result, {'pattern_a': 1, 'line_a': 13, 'pattern_b': 0,
                                  'line_b': 13, 'direction_a': True, 'direction_b': True})
-        with self.assertRaises(ValueError): native.bind_fixed(source, target, capture(target), 2)
+        with self.assertRaises(ValueError): native.bind_fixed(source, target, capture(target), 3)
 
     def test_export_pairing_requires_intended_edges_not_just_counts(self):
         self.assertTrue(hasattr(native, 'verify_fixed_result'), 'result verifier missing')

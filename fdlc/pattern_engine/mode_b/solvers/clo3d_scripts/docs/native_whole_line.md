@@ -13,7 +13,28 @@ exports bind uniquely to native lines by endpoints and bounded length agreement.
 Reported native lengths are then placed in **exported contour order** via that
 bijection, never native array order or `lineIndex` ordinals. Cumulative fractions
 use `math.fsum`. Unique LineIDs, exact intended recipe pairing, counts, effective
-endpoint direction and both adjacent groups remain mandatory.
+endpoint direction and all completed fixed groups remain mandatory.
+
+## Bounded third stage
+
+The internal binder accepts only groups 0, 1 and 2: `side_top_L`,
+`side_hip_knee_L`, `side_knee_hem_L`. Group2 is whole source section 3 on
+Back_Left and Front_Left, boundary order [3,4]: knee pairs with knee and hem
+with hem. Native flags are `not (export_reversed XOR native_reversed)`;
+they are not copied from recipe Direction. A reversed observed native line
+therefore reverses its flag. Result count 3 verifies all three unique intended
+pairings with the same authenticated native-length model and direction policy.
+No later group or arbitrary caller indices are accepted.
+
+The canonical 20-group recipe was fully classified with `whole_line_recipe.analyze`:
+19 groups are one whole section per side; only group10 `center_front` spans
+multiple whole sections (8,9,10,11 on each Front panel). No partial section occurs
+under the source recipe boundary model. This is coverage eligibility, not blanket
+native support. A future programmatic route should keep a fixed recipe-owned plan,
+prove endpoint orientation per seam family and disjoint occupancy, and resolve
+center_front segment correspondence before splitting it. Do not add one public API
+per remaining group or silently pair multi-section ordinals. Group2 native host
+acceptance, physical orientation, persistence and simulation remain separate gates.
 
 ## Numerical acceptance budget
 
