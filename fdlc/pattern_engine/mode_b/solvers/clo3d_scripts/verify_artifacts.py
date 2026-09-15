@@ -129,6 +129,7 @@ def validate_schema(data):
                     in (
                         {"ShapeID", "LineID", "Direction"},
                         {"ShapeID", "LengthParam", "Direction"},
+                        {"ShapeID", "LineID", "LengthParam", "Direction"},
                     ),
                     "side-schema",
                 )
@@ -138,10 +139,11 @@ def validate_schema(data):
                 if "LineID" in side:
                     lid = side["LineID"]
                     require(text(lid) and lid in lines[sid], "unknown-line")
-                    edge = (sid, lid)
-                    require(edge not in used, "physical-edge-reuse")
-                    used.add(edge)
-                else:
+                    if "LengthParam" not in side:
+                        edge = (sid, lid)
+                        require(edge not in used, "physical-edge-reuse")
+                        used.add(edge)
+                if "LengthParam" in side:
 
                     fractions = side["LengthParam"]
                     require(

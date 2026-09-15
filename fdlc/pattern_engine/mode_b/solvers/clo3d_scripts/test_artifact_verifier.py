@@ -49,6 +49,21 @@ def fixture():
     }
 
 
+def test_host_line_and_lengthparam_side_form_is_valid(tmp_path):
+    """CLO 2026.1 can serialize a bounded seam with both fields."""
+    data = fixture()
+    for side in data["SeamLinePairGroupList"][0]["PairList"][0].values():
+        side["LengthParam"] = {"fStart": 0.0, "fEnd": 1.0}
+    path = tmp_path / "host-form.json"
+    path.write_text(json.dumps(data))
+
+    report = load("verify_artifacts").verify({"clo-export": path})
+
+    assert report["status"] == "incomplete"
+    assert report["errors"] == []
+    assert report["artifacts"]["clo-export"]["seam_groups"] == 1
+
+
 def files(tmp_path, source=None):
     source = source or fixture()
     export = copy.deepcopy(source)
