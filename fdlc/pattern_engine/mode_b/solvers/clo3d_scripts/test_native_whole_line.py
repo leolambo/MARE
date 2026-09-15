@@ -1,6 +1,7 @@
 """Synthetic exact observed GetPatternLineInfo schema, not host fixtures."""
 import copy
 import json
+import struct
 import unittest
 import seam_correspondence as geo
 from test_whole_line_recipe import fixture
@@ -55,9 +56,76 @@ class NativeBindingTests(unittest.TestCase):
                       'LengthParam': {'fStart': .75, 'fEnd': 1.0}},
             'Second': {'ShapeID': 'Front_Left-export', 'LineID': '1', 'Direction': True,
                        'LengthParam': {'fStart': .75, 'fEnd': 1.0}}}]}]
-        native.verify_fixed_result(source, target, sewn, 1)
+        native.verify_fixed_result(source, target, sewn, 1, capture(target))
         sewn['SeamLinePairGroupList'][0]['PairList'][0]['First']['LineID'] = '2'
-        with self.assertRaises(ValueError): native.verify_fixed_result(source, target, sewn, 1)
+        with self.assertRaisesRegex(ValueError, 'native-result-whole-section'):
+            native.verify_fixed_result(source, target, sewn, 1, capture(target))
+
+    def test_native_length_model_not_analytic_perimeter(self):
+        source, target = fixture()
+        live = capture(target)
+        sewn = copy.deepcopy(target)
+        pair = {}
+        for role, name in zip(('First', 'Second'), ('Back_Left', 'Front_Left')):
+            row = next(r for r in live['patterns'] if json.loads(r['pattern_information_json'])['name'] == name)
+            info = json.loads(row['pattern_line_info_json'])
+            # Deliberately distinct native length model; reverse native endpoint
+            # orientation and array order, retaining explicit nonordinal indices.
+            for line in info['lines']:
+                line['start'], line['end'] = line['end'], line['start']
+                if line['lineIndex'] == 10: line['length'] += .01
+            row['pattern_line_info_json'] = json.dumps(info)
+            sizes = [next(l['length'] for l in info['lines'] if l['lineIndex'] == 10+i) for i in range(4)]
+            fractions = geo.boundaries(sizes)
+            pair[role] = {'ShapeID': name+'-export', 'LineID': '1', 'Direction': True,
+                          'LengthParam': {'fStart': fractions[3], 'fEnd': fractions[4]}}
+        sewn['SeamLinePairGroupList'] = [{'PairList': [pair]}]
+        native.verify_fixed_result(source, target, sewn, 1, live)
+        rounded = copy.deepcopy(sewn)
+        for side in rounded['SeamLinePairGroupList'][0]['PairList'][0].values():
+            for key, value in side['LengthParam'].items():
+                side['LengthParam'][key] = round(struct.unpack('f', struct.pack('f', value))[0], 9)
+        native.verify_fixed_result(source, target, rounded, 1, live)
+        for kind in ('missing', 'stale', 'partial', 'local', 'line', 'direction', 'outside'):
+            with self.subTest(kind=kind):
+                bad, witness = copy.deepcopy(sewn), copy.deepcopy(live)
+                side = bad['SeamLinePairGroupList'][0]['PairList'][0]['First']
+                if kind == 'missing': witness = None
+                if kind == 'stale': witness['patterns'][0]['outline_points'] = [1]
+                if kind == 'partial': side['LengthParam']['fStart'] += .001
+                if kind == 'local': side['LengthParam'] = {'fStart': 0, 'fEnd': 1}
+                if kind == 'line': side['LineID'] = '2'
+                if kind == 'direction': side['Direction'] = False
+                if kind == 'outside': side['LengthParam']['fStart'] += (2**-23 + 5e-10) * 1.001
+                with self.assertRaises(ValueError): native.verify_fixed_result(source, target, bad, 1, witness)
+
+    def test_physical_caps_large_perimeter_and_tiny_section(self):
+        for width, height in ((1000000., 1000000.), (1000., .01)):
+            with self.subTest(width=width, height=height):
+                source, target = fixture()
+                for doc in (source, target):
+                    for panel in doc['PatternList']:
+                        for line in panel['ShapeInfo']['LineList']:
+                            for point in line['PointList']:
+                                point['Position']['x'] *= width/10
+                                point['Position']['y'] *= height/10
+                perimeter = 2*(width+height)
+                for side in source['SeamLinePairGroupList'][0]['PairList'][0].values():
+                    side['LengthParam'] = {'fStart': width/perimeter, 'fEnd': .5}
+                sewn = copy.deepcopy(target)
+                pair = {role: {'ShapeID': name+'-export', 'LineID': '1', 'Direction': True,
+                    'LengthParam': {'fStart': 1-height/perimeter, 'fEnd': 1.}}
+                    for role, name in zip(('First','Second'), ('Back_Left','Front_Left'))}
+                sewn['SeamLinePairGroupList'] = [{'PairList': [pair]}]
+                live = capture(target)
+                native.verify_fixed_result(source, target, sewn, 1, live)
+                bound = min(2**-23+5e-10, .001/perimeter, .001*height/perimeter)
+                good = copy.deepcopy(sewn)
+                good['SeamLinePairGroupList'][0]['PairList'][0]['First']['LengthParam']['fStart'] += bound*.99
+                native.verify_fixed_result(source, target, good, 1, live)
+                pair['First']['LengthParam']['fStart'] += bound*1.01
+                with self.assertRaisesRegex(ValueError, 'native-result-whole-section'):
+                    native.verify_fixed_result(source, target, sewn, 1, live)
 
     def test_reversed_native_line_sets_endpoint_direction(self):
         _, target = fixture(); live = capture(target)

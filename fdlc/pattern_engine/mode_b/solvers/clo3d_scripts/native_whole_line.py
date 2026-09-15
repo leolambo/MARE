@@ -16,6 +16,13 @@ import whole_line_recipe
 ENDPOINT_MM = .001
 LENGTH_MM = .02
 
+# Narrow observed float32/decimal native export profile: two half-ULPs at
+# unit scale plus half a nine-decimal-place serialization step. This is an
+# acceptance budget, NOT a guarantee of SDK summation/serialization behavior.
+FRACTION_BUDGET = 2**-23 + 5e-10
+ENDPOINT_ERROR_MM = .001
+SECTION_ERROR_RATIO = .001
+
 
 def _point(value):
     geo.require(type(value) is dict and all(type(value.get(k)) in (int, float)
@@ -71,7 +78,9 @@ def bind_geometry(exported, live):
             geo.require(len(candidates) == 1, 'native-geometry-unmatched-or-ambiguous')
             matches.append(candidates[0])
         geo.require(len({i for i, _ in matches}) == len(native), 'native-geometry-not-bijective')
-        result[name] = {'pattern_index': index, 'sections': matches}
+        sizes = {i: size for i, _, size in parsed}
+        result[name] = {'pattern_index': index, 'sections': matches,
+                        'lengths': [sizes[i] for i, _ in matches]}
     geo.require(result.keys() == panels.keys(), 'native-pattern-set')
     return result
 
@@ -80,7 +89,7 @@ def bind_fixed(source, exported, live, group):
     """Only the understood side-top / adjacent hip-knee endpoint pairing.
 
     Both source sections pair their starts together and ends together. The retained
-    host orientation control represents that same forward/forward traversal using
+    generated orientation fixture represents that same forward/forward traversal using
     reversed LengthParam + opposite Direction on one side. Do not copy its JSON
     booleans into the native API: SDK true means forward along the observed line.
     """
@@ -103,18 +112,24 @@ def bind_fixed(source, exported, live, group):
                 line_b=refs[1][1], direction_a=refs[0][2], direction_b=refs[1][2])
 
 
-def verify_fixed_result(source, before, after, count):
+def verify_fixed_result(source, before, after, count, live=None):
     """Conservative known whole-line export profile, not generic scalar semantics.
 
     Verify all cubic control points through pipeline correspondence, unique target
     LineIDs, both intended pairs, whole-section endpoints and endpoint orientation.
-    Unknown export representation fails closed rather than declaring SDK failure.
+    live MUST be the caller-authenticated same-run export-bracket geometry, equal
+    to the complete post-sewing readback. This pure verifier cannot authenticate
+    run provenance itself. Missing witnesses and unknown representations fail
+    closed. Native lengths are ordered by geometry correspondence, not indices.
     """
     geo.require(type(count) is int and count in (1, 2), 'native-result-count')
     old, new = geo.panel_index(before), geo.panel_index(after)
     geo.require(old.keys() == new.keys(), 'native-result-panels')
     for name in old:
         geo.match_sections(geo.points(old[name]), geo.points(new[name]))
+    # Bind both exports; no analytic fallback and no relaxation of curve checks.
+    bind_geometry(before, live)
+    mapping = bind_geometry(after, live)
     intended = whole_line_recipe.analyze(source, after)['groups'][:count]
     groups = after.get('SeamLinePairGroupList')
     geo.require(type(groups) is list and len(groups) == count, 'native-result-count')
@@ -133,13 +148,22 @@ def verify_fixed_result(source, before, after, count):
                        if line.get('ID', line.get('ShapeID')) == side.get('LineID')]
             geo.require(len(indices) == 1 and type(side.get('Direction')) is bool,
                         'native-result-line')
-            index = indices[0]; fractions = geo.boundaries(geo.lengths(geo.points(new[name])))
+            index = indices[0]
+            sizes = mapping[name]['lengths']
+            perimeter = math.fsum(sizes)
+            geo.require(math.isfinite(perimeter) and perimeter > 0, 'native-result-perimeter')
+            fractions = [math.fsum(sizes[:i])/perimeter for i in range(len(sizes)+1)]
+            # Both absolute physical error and relative section loss are bounded;
+            # tiny sections/large perimeters never inherit a unit-scale allowance.
+            tolerance = min(FRACTION_BUDGET, ENDPOINT_ERROR_MM/perimeter,
+                            SECTION_ERROR_RATIO*sizes[index]/perimeter)
             params = side.get('LengthParam', {})
             start, end = params.get('fStart'), params.get('fEnd')
             geo.require(all(type(x) in (int, float) and math.isfinite(x) for x in (start, end)),
                         'native-result-endpoints')
-            forward = abs(start-fractions[index]) <= 1e-6 and abs(end-fractions[index+1]) <= 1e-6
-            backward = abs(end-fractions[index]) <= 1e-6 and abs(start-fractions[index+1]) <= 1e-6
+            geo.require(0 <= start <= 1 and 0 <= end <= 1, 'native-result-endpoints')
+            forward = abs(start-fractions[index]) <= tolerance and abs(end-fractions[index+1]) <= tolerance
+            backward = abs(end-fractions[index]) <= tolerance and abs(start-fractions[index+1]) <= tolerance
             geo.require(forward != backward, 'native-result-whole-section')
             signature.append((name, index, forward == side['Direction']))
         observed.append(tuple(sorted(signature)))
