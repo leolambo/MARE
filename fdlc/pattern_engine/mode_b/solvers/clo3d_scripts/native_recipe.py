@@ -26,6 +26,52 @@ POLICY = tuple(
     ('wb_side_L', (('WB_Front',4,True), ('WB_Back',2,False))),
 )
 WHOLE_GROUPS = tuple(i for i in range(len(POLICY)) if i != 10)
+NATIVE_STAGE_COUNT = 23
+
+
+def execution_plan(source, target):
+    """Fixed graph refinement: nineteen prior pairs, then four CF constituents.
+
+    Equal reflected straight sections with corresponding shared junctions induce
+    the same continuous unit-arclength pairing as the unsplit CF interval. This
+    is source graph/no-easing equivalence, NOT CLO junction/drape acceptance.
+    No source data is rewritten; SDK grouping and physical behavior are separate.
+    """
+    semantic = recipe_plan(source, target)
+    cf = semantic[10]
+    panels = {name: geo.points(p) for name,p in geo.panel_index(source).items()}
+    # Deliberately bounded to the observed four straight, monotone CF sections.
+    # Full reflected geometry and unique candidate matching precede this check.
+    for side in cf['sides']:
+        curves = [panels[side['panel']][i] for i in side['source_sections']]
+        geo.require(len(curves) == 4 and all(len(s) == 2 for s in curves)
+                    and all(abs(p[0]-curves[0][0][0]) <= 1e-6 for s in curves for p in s)
+                    and all(s[-1][1] > s[0][1] for s in curves)
+                    and all(geo.close([a[-1]], [b[0]], 1e-6) for a,b in zip(curves,curves[1:])),
+                    'native-center-front-continuous-straight')
+    pairs = cf['constituent_candidates']
+    geo.require([a for a,b in pairs] == cf['sides'][0]['source_sections'] and
+                [b for a,b in pairs] == cf['sides'][1]['source_sections'],
+                'native-center-front-junction-order')
+    result = [semantic[i] for i in WHOLE_GROUPS]
+    for constituent, pair in enumerate(pairs):
+        sides = []
+        for side, section in zip(cf['sides'], pair):
+            j = side['source_sections'].index(section)
+            sides.append(dict(side, source_sections=[section],
+                target_sections=[side['target_sections'][j]],
+                target_reversed=[side['target_reversed'][j]],
+                source_boundary_order=[section,section+1], coverage='whole-target-section',
+                source_length_mm=geo.arc_length(panels[side['panel']][section])))
+        result.append(dict(index=10, name='center_front', constituent=constituent,
+            supported=True, status='equal-arclength-graph-refinement', sides=sides,
+            length_delta_mm=sides[0]['source_length_mm']-sides[1]['source_length_mm']))
+    # Exact coverage equality, no missing source sections, no duplicate occupation.
+    expected = {(s['panel'],i) for g in semantic for s in g['sides'] for i in s['source_sections']}
+    actual = [(s['panel'],i) for g in result for s in g['sides'] for i in s['source_sections']]
+    geo.require(len(result) == NATIVE_STAGE_COUNT and len(actual) == len(set(actual))
+                and set(actual) == expected, 'native-center-front-graph-coverage')
+    return result
 
 
 def recipe_plan(source, target):

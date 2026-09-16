@@ -124,7 +124,7 @@ class RecipeTests(unittest.TestCase):
                 if kind=='count': bad['SeamLinePairGroupList'].pop()
                 if kind=='partial': bad['SeamLinePairGroupList'][17]['PairList'][0]['First']['LengthParam']['fStart']+=.001
                 with self.assertRaises(ValueError): verify(source,target,bad,19,live)
-        for bad in (-1,19,True):
+        for bad in (-1,23,True):
             with self.assertRaises(ValueError): native.bind_recipe(source,target,live,bad)
         # Host array order and endpoints are not source traversal.
         for row in live['patterns']:

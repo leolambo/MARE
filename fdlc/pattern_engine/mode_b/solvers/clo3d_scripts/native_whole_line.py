@@ -9,7 +9,7 @@ import json
 import math
 import seam_correspondence as geo
 import whole_line_recipe
-from native_recipe import recipe_plan, WHOLE_GROUPS
+from native_recipe import recipe_plan, execution_plan, WHOLE_GROUPS, NATIVE_STAGE_COUNT
 
 # Native float endpoints and tessellated length: measured retained comparison
 # maximum length residual 0.012566 mm. These are explicit matching tolerances,
@@ -132,24 +132,17 @@ def verify_fixed_result(source, before, after, count, live=None, *, requests=Non
 
 def bind_recipe(source, exported, live, stage):
     """Internal bounded stage, not a caller-selected native reference."""
-    geo.require(type(stage) is int and 0 <= stage < len(WHOLE_GROUPS), 'unsupported-native-stage')
-    selected = recipe_plan(source, exported)[WHOLE_GROUPS[stage]]
+    geo.require(type(stage) is int and 0 <= stage < NATIVE_STAGE_COUNT, 'unsupported-native-stage')
+    selected = execution_plan(source, exported)[stage]
     mapping = bind_geometry(exported, live)
-    refs=[]
-    for side in selected['sides']:
-        name=side['panel']; section=side['target_sections'][0]
-        index,reverse=mapping[name]['sections'][section]
-        refs.append((mapping[name]['pattern_index'],index,
-                     side['forward'] ^ side['target_reversed'][0] ^ reverse))
-    return dict(pattern_a=refs[0][0],line_a=refs[0][1],pattern_b=refs[1][0],line_b=refs[1][1],
-                direction_a=refs[0][2],direction_b=refs[1][2])
+    return _planned_requests([selected], mapping)[0]
 
 
 def verify_recipe_result(source, before, after, count, live=None, *, requests=None):
-    geo.require(type(count) is int and 1 <= count <= len(WHOLE_GROUPS), 'native-result-count')
-    recipe_plan(source, after)
-    plan = recipe_plan(source, before)
-    _check_requests(requests, _planned_requests([plan[i] for i in WHOLE_GROUPS[:count]],
+    geo.require(type(count) is int and 1 <= count <= NATIVE_STAGE_COUNT, 'native-result-count')
+    execution_plan(source, after)
+    plan = execution_plan(source, before)
+    _check_requests(requests, _planned_requests(plan[:count],
                                                bind_geometry(before, live)))
     return verify_native_output(before, after, live, requests)
 
@@ -158,6 +151,9 @@ def _planned_requests(intended, mapping):
     result = []
     for group in intended:
         geo.require(len(group['sides']) == 2, 'native-result-recipe')
+        if 'constituent' in group:
+            lengths = [mapping[s['panel']]['lengths'][s['target_sections'][0]] for s in group['sides']]
+            geo.require(abs(lengths[0]-lengths[1]) <= 1e-6, 'native-center-front-length-equality')
         request = {}
         for suffix, side in zip(('a', 'b'), group['sides']):
             geo.require(side['coverage'] == 'whole-target-section', 'native-result-recipe')
@@ -171,7 +167,7 @@ def _planned_requests(intended, mapping):
 
 def _check_requests(requests, expected=None):
     fields = {'pattern_a', 'line_a', 'pattern_b', 'line_b', 'direction_a', 'direction_b'}
-    geo.require(type(requests) is list and 1 <= len(requests) <= len(WHOLE_GROUPS),
+    geo.require(type(requests) is list and 1 <= len(requests) <= NATIVE_STAGE_COUNT,
                 'native-result-requests')
     for request in requests:
         geo.require(type(request) is dict and set(request) == fields and
