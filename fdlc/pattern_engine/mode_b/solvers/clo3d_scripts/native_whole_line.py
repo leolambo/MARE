@@ -113,7 +113,7 @@ def bind_fixed(source, exported, live, group):
                 line_b=refs[1][1], direction_a=refs[0][2], direction_b=refs[1][2])
 
 
-def verify_fixed_result(source, before, after, count, live=None):
+def verify_fixed_result(source, before, after, count, live=None, *, requests=None):
     """Conservative known whole-line export profile, not generic scalar semantics.
 
     Verify all cubic control points through pipeline correspondence, unique target
@@ -124,8 +124,10 @@ def verify_fixed_result(source, before, after, count, live=None):
     closed. Native lengths are ordered by geometry correspondence, not indices.
     """
     geo.require(type(count) is int and count in (1, 2, 3), 'native-result-count')
-    intended = whole_line_recipe.analyze(source, after)['groups'][:count]
-    return _verify_result(before, after, count, live, intended)
+    whole_line_recipe.analyze(source, after)
+    intended = whole_line_recipe.analyze(source, before)['groups'][:count]
+    _check_requests(requests, _planned_requests(intended, bind_geometry(before, live)))
+    return verify_native_output(before, after, live, requests)
 
 
 def bind_recipe(source, exported, live, stage):
@@ -143,13 +145,55 @@ def bind_recipe(source, exported, live, stage):
                 direction_a=refs[0][2],direction_b=refs[1][2])
 
 
-def verify_recipe_result(source, before, after, count, live=None):
+def verify_recipe_result(source, before, after, count, live=None, *, requests=None):
     geo.require(type(count) is int and 1 <= count <= len(WHOLE_GROUPS), 'native-result-count')
-    plan=recipe_plan(source,after)
-    return _verify_result(before,after,count,live,[plan[i] for i in WHOLE_GROUPS[:count]])
+    recipe_plan(source, after)
+    plan = recipe_plan(source, before)
+    _check_requests(requests, _planned_requests([plan[i] for i in WHOLE_GROUPS[:count]],
+                                               bind_geometry(before, live)))
+    return verify_native_output(before, after, live, requests)
 
 
-def _verify_result(before, after, count, live, intended):
+def _planned_requests(intended, mapping):
+    result = []
+    for group in intended:
+        geo.require(len(group['sides']) == 2, 'native-result-recipe')
+        request = {}
+        for suffix, side in zip(('a', 'b'), group['sides']):
+            geo.require(side['coverage'] == 'whole-target-section', 'native-result-recipe')
+            panel = mapping[side['panel']]
+            line, reverse = panel['sections'][side['target_sections'][0]]
+            request.update({ 'pattern_'+suffix: panel['pattern_index'], 'line_'+suffix: line,
+                'direction_'+suffix: side.get('forward', True) ^ side['target_reversed'][0] ^ reverse})
+        result.append(request)
+    return result
+
+
+def _check_requests(requests, expected=None):
+    fields = {'pattern_a', 'line_a', 'pattern_b', 'line_b', 'direction_a', 'direction_b'}
+    geo.require(type(requests) is list and 1 <= len(requests) <= len(WHOLE_GROUPS),
+                'native-result-requests')
+    for request in requests:
+        geo.require(type(request) is dict and set(request) == fields and
+                    all(type(request[k]) is bool for k in ('direction_a', 'direction_b')) and
+                    all(type(request[k]) is int and 0 <= request[k] < 4096
+                        for k in ('pattern_a', 'line_a', 'pattern_b', 'line_b')),
+                    'native-result-requests')
+    if expected is not None:
+        geo.require(requests == expected, 'native-result-request-policy')
+
+
+def verify_native_output(before, after, live, requests):
+    """Pure native-only output contract, NOT authentication or physical acceptance.
+
+    Caller must authenticate exact SDK requests and same-run geometry. Both raw
+    fields must equal SDK direction XOR native/export reversal. The fields are
+    redundant in this observed profile; never compose them with each other.
+    Reversed mappings are a coordinate transform, tested synthetically, not an
+    assertion of additional host observations or universal JSON semantics.
+    """
+    _check_requests(requests)
+    count = len(requests)
     old, new = geo.panel_index(before), geo.panel_index(after)
     geo.require(old.keys() == new.keys(), 'native-result-panels')
     for name in old:
@@ -191,14 +235,23 @@ def _verify_result(before, after, count, live, intended):
             forward = abs(start-fractions[index]) <= tolerance and abs(end-fractions[index+1]) <= tolerance
             backward = abs(end-fractions[index]) <= tolerance and abs(start-fractions[index+1]) <= tolerance
             geo.require(forward != backward, 'native-result-whole-section')
-            signature.append((name, index, forward == side['Direction']))
+            # Native-only observed profile: interval order and raw Direction
+            # are coupled outputs, not two independent reversal operators.
+            signature.append((name, index, forward, side['Direction']))
         observed.append(tuple(sorted(signature)))
     expected = []
-    for group in intended:
-        geo.require(len(group['sides']) == 2, 'native-result-recipe')
+    for request in requests:
         signature = []
-        for side in group['sides']:
-            geo.require(side['coverage'] == 'whole-target-section', 'native-result-recipe')
-            signature.append((side['panel'], side['target_sections'][0], side.get('forward', True) ^ side['target_reversed'][0]))
+        for suffix in ('a', 'b'):
+            matches = [(name, index, reverse)
+                       for name, panel in mapping.items()
+                       if panel['pattern_index'] == request['pattern_'+suffix]
+                       for index, (line, reverse) in enumerate(panel['sections'])
+                       if line == request['line_'+suffix]]
+            geo.require(len(matches) == 1, 'native-result-request-line')
+            name, index, reverse = matches[0]
+            export_forward = request['direction_'+suffix] ^ reverse
+            signature.append((name, index, export_forward, export_forward))
+        geo.require(signature[0][:2] != signature[1][:2], 'native-result-request-pair')
         expected.append(tuple(sorted(signature)))
     geo.require(sorted(observed) == sorted(expected), 'native-result-pairing-or-direction')

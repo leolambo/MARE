@@ -27,6 +27,12 @@ def fixture():
     return source, target
 
 
+def verify(source, before, after, count, live):
+    intended = [native.recipe_plan(source, before)[i] for i in native.WHOLE_GROUPS[:count]]
+    requests = native._planned_requests(intended, native.bind_geometry(before, live))
+    return native.verify_recipe_result(source, before, after, count, live, requests=requests)
+
+
 class RecipeTests(unittest.TestCase):
     def test_all_twenty_classified_and_nineteen_bounded(self):
         self.assertTrue(hasattr(native, 'recipe_plan'), 'recipe plan missing')
@@ -106,9 +112,10 @@ class RecipeTests(unittest.TestCase):
                 fractions=geo.boundaries([geo.arc_length(s) for s in geo.points(panel)])
                 self.assertEqual(ref['direction_'+suffix], side['forward'])
                 pair[role]={'ShapeID':panel['ID'],'LineID':panel['ShapeInfo']['LineList'][section]['ID'],
-                    'Direction':side['forward'], 'LengthParam':dict(zip(('fStart','fEnd'),fractions[section:section+2]))}
+                    'Direction':side['forward'], 'LengthParam':dict(zip(('fStart','fEnd'),
+                        fractions[section:section+2] if side['forward'] else fractions[section:section+2][::-1]))}
             sewn['SeamLinePairGroupList'].append({'PairList':[pair]})
-            native.verify_recipe_result(source,target,sewn,stage+1,live)
+            verify(source,target,sewn,stage+1,live)
         for kind in ('direction','duplicate','count','partial'):
             with self.subTest(kind=kind):
                 bad=copy.deepcopy(sewn)
@@ -116,7 +123,7 @@ class RecipeTests(unittest.TestCase):
                 if kind=='duplicate': bad['SeamLinePairGroupList'][5]=copy.deepcopy(bad['SeamLinePairGroupList'][0])
                 if kind=='count': bad['SeamLinePairGroupList'].pop()
                 if kind=='partial': bad['SeamLinePairGroupList'][17]['PairList'][0]['First']['LengthParam']['fStart']+=.001
-                with self.assertRaises(ValueError): native.verify_recipe_result(source,target,bad,19,live)
+                with self.assertRaises(ValueError): verify(source,target,bad,19,live)
         for bad in (-1,19,True):
             with self.assertRaises(ValueError): native.bind_recipe(source,target,live,bad)
         # Host array order and endpoints are not source traversal.

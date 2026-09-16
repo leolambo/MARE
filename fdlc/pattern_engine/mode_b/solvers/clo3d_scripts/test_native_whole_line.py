@@ -25,6 +25,12 @@ def capture(target):
     return {'ok': True, 'pattern_count': len(rows), 'patterns': rows}
 
 
+def verify(source, before, after, count, live):
+    intended = native.whole_line_recipe.analyze(source, before)["groups"][:count]
+    requests = native._planned_requests(intended, native.bind_geometry(before, live))
+    return native.verify_fixed_result(source, before, after, count, live, requests=requests)
+
+
 class NativeBindingTests(unittest.TestCase):
     def test_group2_binds_whole_section_with_native_reversal(self):
         source, target = fixture()
@@ -50,12 +56,12 @@ class NativeBindingTests(unittest.TestCase):
         sewn, _ = geo.correspond(source, target)
         for group in sewn['SeamLinePairGroupList']:
             for side in group['PairList'][0].values(): side['Direction'] = True
-        native.verify_fixed_result(source, target, sewn, 3, live)
+        verify(source, target, sewn, 3, live)
         for index in range(3):
             bad = copy.deepcopy(sewn)
             bad['SeamLinePairGroupList'][index]['PairList'][0]['First']['Direction'] = False
             with self.assertRaisesRegex(ValueError, 'native-result-pairing-or-direction'):
-                native.verify_fixed_result(source, target, bad, 3, live)
+                verify(source, target, bad, 3, live)
         for invalid in (-1, 3, True):
             with self.assertRaisesRegex(ValueError, 'unsupported-native-group'):
                 native.bind_fixed(source, target, live, invalid)
@@ -90,10 +96,10 @@ class NativeBindingTests(unittest.TestCase):
                       'LengthParam': {'fStart': .75, 'fEnd': 1.0}},
             'Second': {'ShapeID': 'Front_Left-export', 'LineID': '1', 'Direction': True,
                        'LengthParam': {'fStart': .75, 'fEnd': 1.0}}}]}]
-        native.verify_fixed_result(source, target, sewn, 1, capture(target))
+        verify(source, target, sewn, 1, capture(target))
         sewn['SeamLinePairGroupList'][0]['PairList'][0]['First']['LineID'] = '2'
         with self.assertRaisesRegex(ValueError, 'native-result-whole-section'):
-            native.verify_fixed_result(source, target, sewn, 1, capture(target))
+            verify(source, target, sewn, 1, capture(target))
 
     def test_native_length_model_not_analytic_perimeter(self):
         source, target = fixture()
@@ -114,12 +120,12 @@ class NativeBindingTests(unittest.TestCase):
             pair[role] = {'ShapeID': name+'-export', 'LineID': '1', 'Direction': True,
                           'LengthParam': {'fStart': fractions[3], 'fEnd': fractions[4]}}
         sewn['SeamLinePairGroupList'] = [{'PairList': [pair]}]
-        native.verify_fixed_result(source, target, sewn, 1, live)
+        verify(source, target, sewn, 1, live)
         rounded = copy.deepcopy(sewn)
         for side in rounded['SeamLinePairGroupList'][0]['PairList'][0].values():
             for key, value in side['LengthParam'].items():
                 side['LengthParam'][key] = round(struct.unpack('f', struct.pack('f', value))[0], 9)
-        native.verify_fixed_result(source, target, rounded, 1, live)
+        verify(source, target, rounded, 1, live)
         for kind in ('missing', 'stale', 'partial', 'local', 'line', 'direction', 'outside'):
             with self.subTest(kind=kind):
                 bad, witness = copy.deepcopy(sewn), copy.deepcopy(live)
@@ -131,7 +137,7 @@ class NativeBindingTests(unittest.TestCase):
                 if kind == 'line': side['LineID'] = '2'
                 if kind == 'direction': side['Direction'] = False
                 if kind == 'outside': side['LengthParam']['fStart'] += (2**-23 + 5e-10) * 1.001
-                with self.assertRaises(ValueError): native.verify_fixed_result(source, target, bad, 1, witness)
+                with self.assertRaises(ValueError): verify(source, target, bad, 1, witness)
 
     def test_physical_caps_large_perimeter_and_tiny_section(self):
         for width, height in ((1000000., 1000000.), (1000., .01)):
@@ -152,14 +158,14 @@ class NativeBindingTests(unittest.TestCase):
                     for role, name in zip(('First','Second'), ('Back_Left','Front_Left'))}
                 sewn['SeamLinePairGroupList'] = [{'PairList': [pair]}]
                 live = capture(target)
-                native.verify_fixed_result(source, target, sewn, 1, live)
+                verify(source, target, sewn, 1, live)
                 bound = min(2**-23+5e-10, .001/perimeter, .001*height/perimeter)
                 good = copy.deepcopy(sewn)
                 good['SeamLinePairGroupList'][0]['PairList'][0]['First']['LengthParam']['fStart'] += bound*.99
-                native.verify_fixed_result(source, target, good, 1, live)
+                verify(source, target, good, 1, live)
                 pair['First']['LengthParam']['fStart'] += bound*1.01
                 with self.assertRaisesRegex(ValueError, 'native-result-whole-section'):
-                    native.verify_fixed_result(source, target, sewn, 1, live)
+                    verify(source, target, sewn, 1, live)
 
     def test_reversed_native_line_sets_endpoint_direction(self):
         _, target = fixture(); live = capture(target)
