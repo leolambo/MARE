@@ -193,6 +193,39 @@ def _compute_line_lengths_mm(lines):
     return lengths
 
 
+def _physical_cubic_length_mm(line):
+    """Integrate a generated rounded-mm cubic, not the legacy seam proxy.
+
+    Kept local to the generator: importing the offline correspondence scripts
+    here would reverse their dependency on the generated artifact. Adaptive
+    Simpson integration uses a 1e-10 mm absolute error budget.
+    """
+    pts = [p["Position"] for p in line["PointList"]]
+    if len(pts) != 4:
+        raise ValueError("physical waist must be a cubic")
+
+    def speed(t):
+        return math.hypot(*(3 * ((1-t)**2 * (pts[1][k]-pts[0][k]) +
+                                2*(1-t)*t * (pts[2][k]-pts[1][k]) +
+                                t*t * (pts[3][k]-pts[2][k])) for k in ("x", "y")))
+
+    def simpson(a, b):
+        return (b-a) * (speed(a) + 4*speed((a+b)/2) + speed(b)) / 6
+
+    def adaptive(a, b, whole, budget, depth):
+        mid = (a+b)/2
+        left, right = simpson(a, mid), simpson(mid, b)
+        delta = left + right - whole
+        if abs(delta) <= 15*budget:
+            return left + right + delta/15
+        if depth == 0:
+            raise ValueError("physical waist arc-length nonconvergence")
+        return (adaptive(a, mid, left, budget/2, depth-1) +
+                adaptive(mid, b, right, budget/2, depth-1))
+
+    return adaptive(0., 1., simpson(0., 1.), 1e-10, 24)
+
+
 def _get_fracs(lengths):
     """Cumulative fractions [0, ..., 1.0] for each line boundary."""
     total = sum(lengths)
@@ -740,8 +773,10 @@ def generate_5panel_json(measurements: dict, output_path: str, b_drop: float = 1
 
     # 2 waistband pieces: front WB (width = 2x front waist) and back WB (width = 2x back waist)
     wb_h = 2.0 * 25.4  # 2" waistband height in mm
-    f_waist_mm = f_lengths[0]
-    b_waist_mm = b_lengths[0]
+    # Physical widths use actual generated waist curves; f/b_lengths remain
+    # the legacy source-fraction convention consumed by the seam mapper.
+    f_waist_mm = _physical_cubic_length_mm(f_clean[0])
+    b_waist_mm = _physical_cubic_length_mm(b_clean[0])
     fwb_w = f_waist_mm * 2  # front WB spans both front panels
     bwb_w = b_waist_mm * 2  # back WB spans both back panels
 
