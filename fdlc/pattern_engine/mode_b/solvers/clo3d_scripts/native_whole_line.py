@@ -9,6 +9,7 @@ import json
 import math
 import seam_correspondence as geo
 import whole_line_recipe
+from native_recipe import recipe_plan, WHOLE_GROUPS
 
 # Native float endpoints and tessellated length: measured retained comparison
 # maximum length residual 0.012566 mm. These are explicit matching tolerances,
@@ -123,6 +124,32 @@ def verify_fixed_result(source, before, after, count, live=None):
     closed. Native lengths are ordered by geometry correspondence, not indices.
     """
     geo.require(type(count) is int and count in (1, 2, 3), 'native-result-count')
+    intended = whole_line_recipe.analyze(source, after)['groups'][:count]
+    return _verify_result(before, after, count, live, intended)
+
+
+def bind_recipe(source, exported, live, stage):
+    """Internal bounded stage, not a caller-selected native reference."""
+    geo.require(type(stage) is int and 0 <= stage < len(WHOLE_GROUPS), 'unsupported-native-stage')
+    selected = recipe_plan(source, exported)[WHOLE_GROUPS[stage]]
+    mapping = bind_geometry(exported, live)
+    refs=[]
+    for side in selected['sides']:
+        name=side['panel']; section=side['target_sections'][0]
+        index,reverse=mapping[name]['sections'][section]
+        refs.append((mapping[name]['pattern_index'],index,
+                     side['forward'] ^ side['target_reversed'][0] ^ reverse))
+    return dict(pattern_a=refs[0][0],line_a=refs[0][1],pattern_b=refs[1][0],line_b=refs[1][1],
+                direction_a=refs[0][2],direction_b=refs[1][2])
+
+
+def verify_recipe_result(source, before, after, count, live=None):
+    geo.require(type(count) is int and 1 <= count <= len(WHOLE_GROUPS), 'native-result-count')
+    plan=recipe_plan(source,after)
+    return _verify_result(before,after,count,live,[plan[i] for i in WHOLE_GROUPS[:count]])
+
+
+def _verify_result(before, after, count, live, intended):
     old, new = geo.panel_index(before), geo.panel_index(after)
     geo.require(old.keys() == new.keys(), 'native-result-panels')
     for name in old:
@@ -130,7 +157,6 @@ def verify_fixed_result(source, before, after, count, live=None):
     # Bind both exports; no analytic fallback and no relaxation of curve checks.
     bind_geometry(before, live)
     mapping = bind_geometry(after, live)
-    intended = whole_line_recipe.analyze(source, after)['groups'][:count]
     groups = after.get('SeamLinePairGroupList')
     geo.require(type(groups) is list and len(groups) == count, 'native-result-count')
     by_id = {p.get('ID', p.get('ShapeID')): name for name, p in new.items()}
@@ -142,7 +168,7 @@ def verify_fixed_result(source, before, after, count, live=None):
         signature = []
         for side in pairs[0].values():
             name = by_id.get(side.get('ShapeID'))
-            geo.require(name in ('Back_Left', 'Front_Left'), 'native-result-panel')
+            geo.require(name in new, 'native-result-panel')
             lines = new[name]['ShapeInfo']['LineList']
             indices = [i for i, line in enumerate(lines)
                        if line.get('ID', line.get('ShapeID')) == side.get('LineID')]
@@ -173,6 +199,6 @@ def verify_fixed_result(source, before, after, count, live=None):
         signature = []
         for side in group['sides']:
             geo.require(side['coverage'] == 'whole-target-section', 'native-result-recipe')
-            signature.append((side['panel'], side['target_sections'][0], not side['target_reversed'][0]))
+            signature.append((side['panel'], side['target_sections'][0], side.get('forward', True) ^ side['target_reversed'][0]))
         expected.append(tuple(sorted(signature)))
     geo.require(sorted(observed) == sorted(expected), 'native-result-pairing-or-direction')
